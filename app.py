@@ -4,6 +4,7 @@ import requests
 import time
 import json
 import os
+import threading
 from datetime import datetime
 from bs4 import BeautifulSoup
 from docx import Document
@@ -11,6 +12,12 @@ from io import BytesIO
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="SEO & GEO Content Engineer", layout="wide", page_icon="✍️")
+
+# --- CONSTANTS ---
+HISTORY_FILE = "article_history.json"
+RUNNING_DIR = "running_tasks"
+if not os.path.exists(RUNNING_DIR):
+    os.makedirs(RUNNING_DIR)
 
 # --- CUSTOM CSS (Premium Dark Mode & Glassmorphism) ---
 st.markdown("""
@@ -257,45 +264,144 @@ def call_ai(prompt, system_prompt="You are an expert SEO Content Engineer."):
         st.error(f"⚠️ Lỗi hệ thống: {str(e)}")
         return f"Error: {str(e)}"
 
-def call_ai_stream(prompt, system_prompt="You are an expert SEO Content Engineer."):
-    url = "https://llm.chiasegpu.vn/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {st.session_state.api_keys['AI']}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "claude-sonnet-4.6",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        "stream": True,
-        "max_tokens": 4000
-    }
+def update_task_status(kw, status_data):
+    """Save current task progress to disk."""
+    path = os.path.join(RUNNING_DIR, f"{kw}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(status_data, f, ensure_ascii=False, indent=4)
+
+def load_task_status(kw):
+    """Load current task progress from disk."""
+    path = os.path.join(RUNNING_DIR, f"{kw}.json")
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rules_path="seo_geo_rules.md"):
+    """Threaded function to perform full generation without st. commands."""
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=90, stream=True)
-        if response.status_code != 200:
-            st.error(f"⚠️ API Error ({response.status_code}): {response.text[:300]}")
-            yield f"Error: {response.text[:200]}"
+        status_data = {
+            "keyword": kw, "status": "processing", "log": "Bắt đầu...", 
+            "research": {}, "meta_title": "", "meta_description": "", "content": ""
+        }
+        update_task_status(kw, status_data)
+
+        # 1. Translate Query
+        status_data["log"] = "Đang quốc tế hóa truy vấn (English)..."
+        update_task_status(kw, status_data)
+        eng_p = f"Translate the keyword '{kw}' into a precise scientific research query in English. Output ONLY the query string."
+        eng_query = ""
+        for chunk in call_ai_stream(eng_p): eng_query += chunk
+        eng_query = clean_ai_html(eng_query.strip()) or kw
+
+        # 2. Research
+        if mode == "🚀 Tự động (Full Workflow)":
+            status_data["log"] = "Đang nghiên cứu (Serp & Linkup)..."
+            update_task_status(kw, status_data)
+            
+            # Serp
+            serp_results = get_serp_results(kw)
+            urls = [r['link'] for r in serp_results[:3]]
+            
+            # Scrape
+            comp_content = ""
+            for url in urls:
+                scraped = scrape_url(url)
+                comp_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 500)
+            comp_content = truncate_text(comp_content, 1500)
+            
+            # Linkup
+            linkup_json = linkup_research(eng_query)
+            status_data["research"] = {
+                "answer": linkup_json.get('answer', ''), 
+                "urls": [s.get('url') for s in linkup_json.get('sources', [])],
+                "sources": linkup_json.get('sources', [])
+            }
+        else:
+            status_data["log"] = "Dữ liệu nghiên cứu thủ công."
+            status_data["research"] = {"answer": "Manual", "urls": []}
+            comp_content = serp_manual
+
+        # 3. Outline
+        status_data["log"] = "Đang lập dàn ý..."
+        update_task_status(kw, status_data)
+        with open(rules_path, "r", encoding="utf-8") as f:
+            raw_rules = f.read()
+        
+        mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (400-600 words). STRICT: NO <a> tags in body text."
+        if "## 6. Quick Reference Card" in raw_rules:
+            mini_rules = raw_rules[raw_rules.find("## 6. Quick Reference Card"):]
+        mini_rules = truncate_text(mini_rules, 800)
+
+        outline_p = f"Rules: {raw_rules}\nKeyword: {kw}\nGenerate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': '...', 'ai_overview_todo': '...', 'key_takeaway_todo': '...', 'headings': [{{'title': '...', 'points': '...'}}], 'faq': [{{'q': '...', 'a': '...'}}]}}"
+        outline_res = ""
+        for chunk in call_ai_stream(outline_p): outline_res += chunk
+        try:
+            outline_data = json.loads(repair_json(extract_json(outline_res)))
+            status_data["meta_title"] = outline_data.get('meta_title', '')
+            status_data["meta_description"] = outline_data.get('meta_description', '')
+        except:
+            status_data["log"] = "Lỗi tạo dàn ý."
+            update_task_status(kw, status_data)
             return
 
-        for line in response.iter_lines():
-            if line:
-                decoded_line = line.decode('utf-8').strip()
-                if decoded_line.startswith("data: "):
-                    content = decoded_line[6:]
-                    if content == "[DONE]":
-                        break
-                    try:
-                        json_data = json.loads(content)
-                        chunk = json_data['choices'][0]['delta'].get('content')
-                        if chunk:
-                            yield chunk
-                    except:
-                        continue
+        # 4. Writing
+        research_context = f"Summary: {status_data['research']['answer']}\nSources: {status_data['research']['urls']}"
+        lang_instr = f"Language: Identify '{kw}''s language. Use it. Translate English research data."
+
+        # Segments
+        segments = [
+            ("Sapo", f"Task: Sapo. Data: {research_context}. {lang_instr}"),
+            ("AI Overview", f"Task: AI Box. Data: {research_context}. {lang_instr}"),
+            ("Key Takeaways", f"Task: Takeaways. {lang_instr}"),
+        ]
+        for name, p in segments:
+            status_data["log"] = f"Đang viết: {name}"
+            update_task_status(kw, status_data)
+            seg_out = ""
+            for chunk in call_ai_stream(p): seg_out += chunk
+            clean_out = clean_ai_html(seg_out)
+            if name == "AI Overview":
+                clean_out = f"<div style='border: 2px solid #00c6ff; padding: 15px; border-radius: 10px; background: rgba(0, 198, 255, 0.05); margin: 20px 0;'><strong>🤖 AI Overview:</strong><br>{clean_out}</div>"
+            status_data["content"] += f"\n\n{clean_out}"
+            update_task_status(kw, status_data)
+
+        # Headings
+        for i, h in enumerate(outline_data.get('headings', [])):
+            status_data["log"] = f"Đang viết Heading {i+1}: {h['title']}"
+            update_task_status(kw, status_data)
+            h_p = f"Heading: {h['title']}\nPoints: {h['points']}\nContext: {research_context}\n{lang_instr}\nSTRICT: NO <a> tags. HTM ONLY."
+            h_out = ""
+            for chunk in call_ai_stream(h_p): h_out += chunk
+            status_data["content"] += f"\n\n{clean_ai_html(h_out)}"
+            update_task_status(kw, status_data)
+
+        # FAQ & References
+        status_data["log"] = "Đang hoàn thiện FAQ & References..."
+        update_task_status(kw, status_data)
+        final_p = f"Task: Write FAQ and Reference list based on {status_data['research']['urls']}. {lang_instr}"
+        final_out = ""
+        for chunk in call_ai_stream(final_p): final_out += chunk
+        status_data["content"] += f"\n\n{clean_ai_html(final_out)}"
+        
+        # Complete
+        status_data["status"] = "complete"
+        status_data["log"] = "✅ Đã xong!"
+        update_task_status(kw, status_data)
+        
+        # Final save to history
+        save_to_history({
+            "keyword": kw, "meta_title": status_data["meta_title"],
+            "meta_description": status_data["meta_description"], "content": status_data["content"]
+        })
+        # Cleanup
+        os.remove(os.path.join(RUNNING_DIR, f"{kw}.json"))
+
     except Exception as e:
-        st.error(f"⚠️ Stream Error: {str(e)}")
-        yield f"Error: {str(e)}"
+        status_data["status"] = "error"
+        status_data["log"] = f"Lỗi: {str(e)}"
+        update_task_status(kw, status_data)
 
 def linkup_research(keyword):
     url = "https://api.linkup.so/v1/search"
@@ -354,172 +460,53 @@ with tab1:
             st.warning("Vui lòng nhập từ khóa.")
         else:
             for kw in keywords:
-                if kw not in st.session_state.articles:
-                    st.session_state.articles[kw] = {
-                        "status": "processing", 
-                        "research": {}, 
-                        "outline": [], 
-                        "content": "", 
-                        "metrics": "", 
-                        "meta_title": "", 
-                        "meta_description": ""
-                    }
-                
-                with st.expander(f"⚙️ Đang xử lý: {kw}", expanded=True):
-                    status_ui = st.status(f"Bắt đầu xử lý: {kw}")
+                # Launch thread if not already running
+                task_path = os.path.join(RUNNING_DIR, f"{kw}.json")
+                if not os.path.exists(task_path):
+                    # Prepare manual data if in manual mode
+                    c_man = competitor_manual if mode == "✍️ Thủ công (Dán dữ liệu)" else ""
+                    r_man = research_manual if mode == "✍️ Thủ công (Dán dữ liệu)" else ""
                     
-                    if mode == "🚀 Tự động (Full Workflow)":
-                        # 1. International Query Generation
-                        status_ui.update(label="🌍 Đang quốc tế hóa truy vấn (English Query)...")
-                        eng_p = f"Translate the keyword '{kw}' into a precise scientific research query in English. Output ONLY the query string."
-                        eng_query = ""
-                        for chunk in call_ai_stream(eng_p): 
-                            eng_query += chunk
-                        eng_query = clean_ai_html(eng_query.strip())
-                        if not eng_query: eng_query = kw
-                        
-                        # 2. SERP
-                        status_ui.update(label="🔍 Đang tìm kiếm SERP...")
-                        serp_results = get_serp_results(kw)
-                        urls = [r['link'] for r in serp_results[:3]]
-                        
-                        # 3. Scraping
-                        status_ui.update(label="📄 Đang cào dữ liệu đối thủ...")
-                        comp_content = ""
-                        for url in urls:
-                            scraped = scrape_url(url)
-                            comp_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 500)
-                        comp_content = truncate_text(comp_content, 1500)
-                        
-                        # 4. Research
-                        status_ui.update(label=f"🧬 Đang nghiên cứu Linkup (Scientific: {eng_query})...")
-                        linkup_json = linkup_research(eng_query)
-                        answer = linkup_json.get('answer', '')
-                        sources = linkup_json.get('sources', [])
-                        source_text = "\n".join([f"- {s.get('name')}: {s.get('snippet','')}" for s in sources[:5]])
-                        raw_linkup = f"Tóm tắt: {answer}\n\nChi tiết: {source_text}"
-                        
-                        st.session_state.articles[kw]['research'] = {
-                            "urls": urls,
-                            "answer": answer,
-                            "raw": linkup_json
-                        }
-                        research_data = truncate_text(raw_linkup, 2000)
-                        competitor_content = comp_content
-                        
-                        # HIỂN THỊ DỮ LIỆU NGHIÊN CỨU NGAY LẬP TỨC
-                        with st.expander("🔍 Dữ liệu nghiên cứu (SERP & Linkup)", expanded=False):
-                            st.markdown("**🔗 Nguồn đối thủ (SERP):**")
-                            for url in urls:
-                                st.write(f"- {url}")
-                            st.divider()
-                            st.markdown("**🧬 Tóm tắt nghiên cứu Linkup:**")
-                            st.write(answer if answer else "Không có tóm tắt.")
-                            st.divider()
-                            st.write(f"🌍 **English Query:** {eng_query}")
-                            st.markdown("**🛠️ Raw Linkup JSON (Debug):**")
-                            st.json(linkup_json)
-                    else:
-                        status_ui.update(label="📝 Đang chuẩn bị dữ liệu thủ công...")
-                        research_data = truncate_text(research_manual, 3000)
-                        competitor_content = truncate_text(competitor_manual, 3000)
-                        st.session_state.articles[kw]['research'] = {"answer": "Nhập thủ công", "raw": research_manual}
-
-                    # 4. Analysis & Outline
-                    status_ui.update(label="📝 Đang lập dàn ý (Outline)...")
-                    with open(rules_path, "r", encoding="utf-8") as f:
-                        raw_rules = f.read()
-                        rules = truncate_text(raw_rules, 3000)
+                    t = threading.Thread(
+                        target=background_worker, 
+                        args=(kw, st.session_state.api_keys, mode, c_man, r_man)
+                    )
+                    t.start()
+            
+            st.success(f"🚀 Đã bắt đầu xử lý {len(keywords)} bài viết chạy ngầm. Bạn có thể đóng tab, khóa máy hoặc chuyển trình duyệt!")
+    # --- DYNAMIC MONITORING UI ---
+    running_files = []
+    if os.path.exists(RUNNING_DIR):
+        running_files = [f for f in os.listdir(RUNNING_DIR) if f.endswith(".json")]
+    
+    if running_files:
+        st.divider()
+        st.subheader("⚙️ Đang xử lý ngầm...")
+        for f in running_files:
+            kwname = f.replace(".json", "")
+            t_status = load_task_status(kwname)
+            if t_status:
+                with st.expander(f"🔄 {kwname}: {t_status['log']}", expanded=True):
+                    # Progress estimate
+                    prog = 0.1
+                    l_lower = t_status['log'].lower()
+                    if "nghiên cứu" in l_lower: prog = 0.3
+                    if "dàn ý" in l_lower: prog = 0.5
+                    if "đang viết" in l_lower: prog = 0.8
+                    if "✅" in t_status['log']: prog = 1.0
                     
-                    mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (400-600 words). \nSTRICT: NO <a> tags in body text. Cite sources using PLAIN TEXT (e.g., 'According to [Source Name]')."
-                    if "## 6. Quick Reference Card" in raw_rules:
-                        mini_rules = raw_rules[raw_rules.find("## 6. Quick Reference Card"):]
-                    mini_rules = truncate_text(mini_rules, 800)
-
-                    st.session_state.articles[kw]['metrics'] = f"Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})"
-                    
-                    outline_prompt = f"""Rules: {rules}
-Research Data: {research_data}
-Keyword: {kw}
-
-GLOBAL LANGUAGE PROTOCOL: Identify the language of the keyword "{kw}". 
-1. Use THIS language for ALL output (Meta, Sapo, AI Box, Headings, FAQ).
-2. Translate all English research data into this target language.
-
-Generate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': 'Hook+Direct Answer', 'ai_overview_todo': 'AI Summary Box (50-80 words)', 'key_takeaway_todo': '3-5 bullet points', 'headings': [{{'title': '...', 'points': '...'}}], 'faq': [{{'q': '...', 'a': '...'}}]}}"""
-                    outline_json_str = st.write_stream(call_ai_stream(truncate_text(outline_prompt, 10000)))
-                    
-                    try:
-                        clean_json = extract_json(outline_json_str)
-                        repaired_json = repair_json(clean_json)
-                        outline_data = json.loads(repaired_json)
-                        st.session_state.articles[kw]['meta_title'] = outline_data.get('meta_title', '')
-                        st.session_state.articles[kw]['meta_description'] = outline_data.get('meta_description', '')
-                    except Exception as e:
-                        st.error(f"Lỗi dàn ý cho {kw}: {str(e)}")
-                        continue
-                    
-                    # 5. Writing (Sequential Segments)
-                    status_ui.update(label="✍️ Đang viết bài (Multi-Language Mode)...")
-                    # Build structured research data mapping
-                    ans = st.session_state.articles[kw]['research'].get('answer', '')
-                    srcs = st.session_state.articles[kw]['research'].get('raw', {}).get('sources', [])
-                    research_map = [f"Summary Facts: {ans}"]
-                    for j, s in enumerate(srcs[:5]):
-                        research_map.append(f"Source {j+1}: {s.get('name')} | URL: {s.get('url')}")
-                    research_context = "\n".join(research_map)
-                    
-                    lang_instr = f"Identify the language of the keyword '{kw}' and write in ONLY that language. Translate any English research data into that language."
-                    
-                    # 5.1 Sapo
-                    status_ui.update(label="✍️ Đang viết Sapo...")
-                    sapo_p = f"Rules: {mini_rules}\n\n{lang_instr}\n\nTask: Write Sapo. Data: {research_context}. \nSTRICT: RAW HTML ONLY."
-                    sapo = st.write_stream(call_ai_stream(truncate_text(sapo_p, 4000)))
-                    st.session_state.articles[kw]['content'] += f"{clean_ai_html(sapo)}"
-                    
-                    # 5.2 AI Overview
-                    status_ui.update(label="✍️ Đang viết AI Overview...")
-                    box_p = f"Rules: {mini_rules}\n\n{lang_instr}\n\nTask: Write AI Summary Box. Data: {research_context}. \nSTRICT: RAW HTML ONLY."
-                    box = st.write_stream(call_ai_stream(truncate_text(box_p, 4000)))
-                    box = clean_ai_html(box)
-                    box_html = f"<div style='border: 2px solid #00c6ff; padding: 15px; border-radius: 10px; background: rgba(0, 198, 255, 0.05); margin: 20px 0;'><strong>🤖 AI Overview:</strong><br>{box}</div>"
-                    st.session_state.articles[kw]['content'] += box_html
-                    
-                    # 5.3 Key Takeaways
-                    status_ui.update(label="✍️ Đang viết Key Takeaways...")
-                    take_p = f"{lang_instr}\n\nTask: Write Key Takeaways (bullet points). Data: {research_context}. \nSTRICT: RAW HTML ONLY."
-                    take = st.write_stream(call_ai_stream(truncate_text(take_p, 2000)))
-                    st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(take)}"
-                    
-                    # 5.4 Body Headings
-                    for i, heading in enumerate(outline_data.get('headings', [])):
-                        status_ui.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"Rules: {mini_rules}\n\n{lang_instr}\n\nContext: {research_context}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section (400-600 words). \nCRITICAL: Mention sources as PLAIN TEXT only (e.g., 'Source: Harvard Health'). NO <a> tags in this section. RAW HTML ONLY."
-                        chunk = st.write_stream(call_ai_stream(truncate_text(write_prompt, 4000)))
-                        st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(chunk)}"
-                    
-                    # 5.5 FAQ
-                    status_ui.update(label="✍️ Đang viết FAQ...")
-                    faq_p = f"Rules: {mini_rules}\n\n{lang_instr}\n\nTask: Write FAQ section (HTML). Questions: {outline_data.get('faq')}. RAW HTML ONLY."
-                    faq = st.write_stream(call_ai_stream(truncate_text(faq_p, 4000)))
-                    st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(faq)}"
-
-                    # 5.6 References
-                    status_ui.update(label="✍️ Đang viết References...")
-                    ref_p = f"{lang_instr}\n\nTask: Create a 'References' section with 3-5 authoritative source URLs from this list. Format as a bulleted list with Source Names and <a> tags. \nData: {research_context}. RAW HTML ONLY."
-                    refs = st.write_stream(call_ai_stream(truncate_text(ref_p, 4000)))
-                    st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(refs)}"
-
-                    st.session_state.articles[kw]['status'] = "complete"
-                    status_ui.update(label="✅ Hoàn thành!", state="complete")
-                    
-                    # AUTO SAVE TO PERMANENT HISTORY
-                    save_to_history({
-                        "keyword": kw,
-                        "meta_title": st.session_state.articles[kw]['meta_title'],
-                        "meta_description": st.session_state.articles[kw]['meta_description'],
-                        "content": st.session_state.articles[kw]['content']
-                    })
+                    st.progress(prog)
+                    if t_status['content']:
+                        st.info("💡 Nội dung đang được cập nhật liên tục từ server...")
+                        # Show latest fragment of content
+                        st.markdown(t_status['content'][-1500:], unsafe_allow_html=True)
+        
+        if st.button("🔄 Làm mới thủ công"):
+            st.rerun()
+        
+        # Auto-refresh pulse to keep the UI alive while writing
+        time.sleep(4)
+        st.rerun()
 
     # --- DISPLAY PERSISTENT RESULTS ---
     if st.session_state.articles:
