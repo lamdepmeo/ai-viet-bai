@@ -369,12 +369,21 @@ with tab1:
                     status_ui = st.status(f"Bắt đầu xử lý: {kw}")
                     
                     if mode == "🚀 Tự động (Full Workflow)":
-                        # 1. SERP
+                        # 1. International Query Generation
+                        status_ui.update(label="🌍 Đang quốc tế hóa truy vấn (English Query)...")
+                        eng_p = f"Translate the keyword '{kw}' into a precise scientific research query in English. Output ONLY the query string."
+                        eng_query = ""
+                        for chunk in call_ai_stream(eng_p): 
+                            eng_query += chunk
+                        eng_query = clean_ai_html(eng_query.strip())
+                        if not eng_query: eng_query = kw
+                        
+                        # 2. SERP
                         status_ui.update(label="🔍 Đang tìm kiếm SERP...")
                         serp_results = get_serp_results(kw)
                         urls = [r['link'] for r in serp_results[:3]]
                         
-                        # 2. Scraping
+                        # 3. Scraping
                         status_ui.update(label="📄 Đang cào dữ liệu đối thủ...")
                         comp_content = ""
                         for url in urls:
@@ -382,9 +391,9 @@ with tab1:
                             comp_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 500)
                         comp_content = truncate_text(comp_content, 1500)
                         
-                        # 3. Research
-                        status_ui.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
-                        linkup_json = linkup_research(kw)
+                        # 4. Research
+                        status_ui.update(label=f"🧬 Đang nghiên cứu Linkup (Scientific: {eng_query})...")
+                        linkup_json = linkup_research(eng_query)
                         answer = linkup_json.get('answer', '')
                         sources = linkup_json.get('sources', [])
                         source_text = "\n".join([f"- {s.get('name')}: {s.get('snippet','')}" for s in sources[:5]])
@@ -407,6 +416,7 @@ with tab1:
                             st.markdown("**🧬 Tóm tắt nghiên cứu Linkup:**")
                             st.write(answer if answer else "Không có tóm tắt.")
                             st.divider()
+                            st.write(f"🌍 **English Query:** {eng_query}")
                             st.markdown("**🛠️ Raw Linkup JSON (Debug):**")
                             st.json(linkup_json)
                     else:
@@ -421,7 +431,7 @@ with tab1:
                         raw_rules = f.read()
                         rules = truncate_text(raw_rules, 3000)
                     
-                    mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (200-500 words per section). Cite research using <a> tags to Source URLs for EEAT."
+                    mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (400-600 words). \nSTRICT: NO <a> tags in body text. Cite sources using PLAIN TEXT (e.g., 'According to [Source Name]')."
                     if "## 6. Quick Reference Card" in raw_rules:
                         mini_rules = raw_rules[raw_rules.find("## 6. Quick Reference Card"):]
                     mini_rules = truncate_text(mini_rules, 800)
@@ -484,7 +494,7 @@ Generate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': 'H
                     # 5.4 Body Headings
                     for i, heading in enumerate(outline_data.get('headings', [])):
                         status_ui.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"Rules: {mini_rules}\n\n{lang_instr}\n\nContext: {research_context}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section (400-600 words). \nCRITICAL: Use <a> tags to provided URLs only. NO MARKDOWN."
+                        write_prompt = f"Rules: {mini_rules}\n\n{lang_instr}\n\nContext: {research_context}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section (400-600 words). \nCRITICAL: Mention sources as PLAIN TEXT only (e.g., 'Source: Harvard Health'). NO <a> tags in this section. RAW HTML ONLY."
                         chunk = st.write_stream(call_ai_stream(truncate_text(write_prompt, 4000)))
                         st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(chunk)}"
                     
@@ -493,6 +503,12 @@ Generate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': 'H
                     faq_p = f"Rules: {mini_rules}\n\n{lang_instr}\n\nTask: Write FAQ section (HTML). Questions: {outline_data.get('faq')}. RAW HTML ONLY."
                     faq = st.write_stream(call_ai_stream(truncate_text(faq_p, 4000)))
                     st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(faq)}"
+
+                    # 5.6 References
+                    status_ui.update(label="✍️ Đang viết References...")
+                    ref_p = f"{lang_instr}\n\nTask: Create a 'References' section with 3-5 authoritative source URLs from this list. Format as a bulleted list with Source Names and <a> tags. \nData: {research_context}. RAW HTML ONLY."
+                    refs = st.write_stream(call_ai_stream(truncate_text(ref_p, 4000)))
+                    st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(refs)}"
 
                     st.session_state.articles[kw]['status'] = "complete"
                     status_ui.update(label="✅ Hoàn thành!", state="complete")
