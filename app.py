@@ -426,11 +426,17 @@ with tab1:
                         mini_rules = raw_rules[raw_rules.find("## 6. Quick Reference Card"):]
                     mini_rules = truncate_text(mini_rules, 800)
 
-                    st.session_states_metrics = f"Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})"
-                    if 'metrics' in st.session_state.articles[kw]:
-                        st.session_state.articles[kw]['metrics'] = st.session_states_metrics
+                    st.session_state.articles[kw]['metrics'] = f"Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})"
                     
-                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': 'Hook+Direct Answer', 'ai_overview_todo': 'AI Summary Box (50-80 words)', 'key_takeaway_todo': '3-5 bullet points', 'headings': [{{'title': '...', 'points': '...'}}], 'faq': [{{'q': '...', 'a': '...'}}]}}"
+                    outline_prompt = f"""Rules: {rules}
+Research Data: {research_data}
+Keyword: {kw}
+
+GLOBAL LANGUAGE PROTOCOL: Identify the language of the keyword "{kw}". 
+1. Use THIS language for ALL output (Meta, Sapo, AI Box, Headings, FAQ).
+2. Translate all English research data into this target language.
+
+Generate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': 'Hook+Direct Answer', 'ai_overview_todo': 'AI Summary Box (50-80 words)', 'key_takeaway_todo': '3-5 bullet points', 'headings': [{{'title': '...', 'points': '...'}}], 'faq': [{{'q': '...', 'a': '...'}}]}}"""
                     outline_json_str = st.write_stream(call_ai_stream(truncate_text(outline_prompt, 10000)))
                     
                     try:
@@ -444,18 +450,26 @@ with tab1:
                         continue
                     
                     # 5. Writing (Sequential Segments)
-                    status_ui.update(label="✍️ Đang viết bài (6-part standard)...")
-                    research_context = truncate_text(st.session_state.articles[kw]['research'].get('answer', '') + "\nURLs: " + ", ".join(st.session_state.articles[kw]['research'].get('urls', [])), 1500)
+                    status_ui.update(label="✍️ Đang viết bài (Multi-Language Mode)...")
+                    # Build structured research data mapping
+                    ans = st.session_state.articles[kw]['research'].get('answer', '')
+                    srcs = st.session_state.articles[kw]['research'].get('raw', {}).get('sources', [])
+                    research_map = [f"Summary Facts: {ans}"]
+                    for j, s in enumerate(srcs[:5]):
+                        research_map.append(f"Source {j+1}: {s.get('name')} | URL: {s.get('url')}")
+                    research_context = "\n".join(research_map)
+                    
+                    lang_instr = f"Identify the language of the keyword '{kw}' and write in ONLY that language. Translate any English research data into that language."
                     
                     # 5.1 Sapo
                     status_ui.update(label="✍️ Đang viết Sapo...")
-                    sapo_p = f"Rules: {mini_rules}\n\nTask: Write Sapo (Hook+Direct Answer). Data: {research_context}. \nSTRICT: Output RAW HTML ONLY. NO MARKDOWN."
+                    sapo_p = f"Rules: {mini_rules}\n\n{lang_instr}\n\nTask: Write Sapo. Data: {research_context}. \nSTRICT: RAW HTML ONLY."
                     sapo = st.write_stream(call_ai_stream(truncate_text(sapo_p, 4000)))
                     st.session_state.articles[kw]['content'] += f"{clean_ai_html(sapo)}"
                     
                     # 5.2 AI Overview
                     status_ui.update(label="✍️ Đang viết AI Overview...")
-                    box_p = f"Rules: {mini_rules}\n\nTask: Write AI Summary Box (50-80 words). Data: {research_context}. \nSTRICT: Output RAW HTML ONLY."
+                    box_p = f"Rules: {mini_rules}\n\n{lang_instr}\n\nTask: Write AI Summary Box. Data: {research_context}. \nSTRICT: RAW HTML ONLY."
                     box = st.write_stream(call_ai_stream(truncate_text(box_p, 4000)))
                     box = clean_ai_html(box)
                     box_html = f"<div style='border: 2px solid #00c6ff; padding: 15px; border-radius: 10px; background: rgba(0, 198, 255, 0.05); margin: 20px 0;'><strong>🤖 AI Overview:</strong><br>{box}</div>"
@@ -463,20 +477,20 @@ with tab1:
                     
                     # 5.3 Key Takeaways
                     status_ui.update(label="✍️ Đang viết Key Takeaways...")
-                    take_p = f"Task: Write Key Takeaways (bullet points). Data: {research_context}. \nSTRICT: Output RAW HTML ONLY."
+                    take_p = f"{lang_instr}\n\nTask: Write Key Takeaways (bullet points). Data: {research_context}. \nSTRICT: RAW HTML ONLY."
                     take = st.write_stream(call_ai_stream(truncate_text(take_p, 2000)))
                     st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(take)}"
                     
                     # 5.4 Body Headings
                     for i, heading in enumerate(outline_data.get('headings', [])):
                         status_ui.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"Rules: {mini_rules}\n\nContext: {research_context}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section in HTML (target 400-600 words). Integrate links. \nIMPORTANT: Finish all tags. RAW HTML ONLY, NO MARKDOWN CODE BLOCKS."
+                        write_prompt = f"Rules: {mini_rules}\n\n{lang_instr}\n\nContext: {research_context}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section (400-600 words). \nCRITICAL: Use <a> tags to provided URLs only. NO MARKDOWN."
                         chunk = st.write_stream(call_ai_stream(truncate_text(write_prompt, 4000)))
                         st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(chunk)}"
                     
                     # 5.5 FAQ
                     status_ui.update(label="✍️ Đang viết FAQ...")
-                    faq_p = f"Rules: {mini_rules}\n\nTask: Write FAQ section (HTML). Questions: {outline_data.get('faq')}. RAW HTML ONLY."
+                    faq_p = f"Rules: {mini_rules}\n\n{lang_instr}\n\nTask: Write FAQ section (HTML). Questions: {outline_data.get('faq')}. RAW HTML ONLY."
                     faq = st.write_stream(call_ai_stream(truncate_text(faq_p, 4000)))
                     st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(faq)}"
 
