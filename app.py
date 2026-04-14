@@ -54,12 +54,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- INITIALIZATION ---
-if 'api_keys' not in st.session_state:
     st.session_state.api_keys = {
         'AI': '',
         'SERP': '',
         'Linkup': ''
     }
+if 'articles' not in st.session_state:
+    st.session_state.articles = {}
 
 # --- SIDEBAR CONFIG ---
 with st.sidebar:
@@ -296,138 +297,115 @@ with tab1:
             st.warning("Vui lòng nhập từ khóa.")
         else:
             for kw in keywords:
+                if kw not in st.session_state.articles:
+                    st.session_state.articles[kw] = {"status": "processing", "research": {}, "outline": [], "content": "", "metrics": ""}
+                
                 with st.expander(f"⚙️ Đang xử lý: {kw}", expanded=True):
-                    status = st.status(f"Bắt đầu xử lý: {kw}")
+                    status_ui = st.status(f"Bắt đầu xử lý: {kw}")
                     
                     if mode == "🚀 Tự động (Full Workflow)":
                         # 1. SERP
-                        status.update(label="🔍 Đang tìm kiếm SERP...")
+                        status_ui.update(label="🔍 Đang tìm kiếm SERP...")
                         serp_results = get_serp_results(kw)
                         urls = [r['link'] for r in serp_results[:3]]
                         
                         # 2. Scraping
-                        status.update(label="📄 Đang cào dữ liệu đối thủ...")
-                        competitor_content = ""
+                        status_ui.update(label="📄 Đang cào dữ liệu đối thủ...")
+                        comp_content = ""
                         for url in urls:
                             scraped = scrape_url(url)
-                            competitor_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 500)
-                        competitor_content = truncate_text(competitor_content, 1500)
+                            comp_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 500)
+                        comp_content = truncate_text(comp_content, 1500)
                         
                         # 3. Research
-                        status.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
+                        status_ui.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
                         linkup_json = linkup_research(kw)
-                        
-                        # TRÍCH XUẤT DỮ LIỆU TỪ LINKUP (SỬ DỤNG ANSWER + SOURCES)
                         answer = linkup_json.get('answer', '')
                         sources = linkup_json.get('sources', [])
                         source_text = "\n".join([f"- {s.get('name')}: {s.get('snippet','')}" for s in sources[:5]])
-                        raw_linkup = f"Tóm tắt nghiên cứu: {answer}\n\nChi tiết nguồn tin:\n{source_text}"
+                        raw_linkup = f"Tóm tắt: {answer}\n\nChi tiết: {source_text}"
                         
-                        if not answer and not sources:
-                            raw_linkup = "No research found."
-                        
+                        st.session_state.articles[kw]['research'] = {
+                            "urls": urls,
+                            "answer": answer,
+                            "raw": linkup_json
+                        }
                         research_data = truncate_text(raw_linkup, 2000)
-                        
-                        # HIỂN THỊ DỮ LIỆU NGHIÊN CỨU
-                        with st.expander("🔍 Dữ liệu nghiên cứu (SERP & Linkup)", expanded=False):
-                            st.markdown("**🔗 Nguồn đối thủ (SERP):**")
-                            for url in urls:
-                                st.write(f"- {url}")
-                            st.divider()
-                            st.markdown("**🧬 Tóm tắt nghiên cứu Linkup:**")
-                            st.write(answer if answer else "Không có tóm tắt.")
-                            st.divider()
-                            st.markdown("**🛠️ Raw Linkup JSON (Debug):**")
-                            st.json(linkup_json)
+                        competitor_content = comp_content
                     else:
-                        # MANUAL MODE DATA SETUP
-                        status.update(label="📝 Đang chuẩn bị dữ liệu thủ công...")
+                        status_ui.update(label="📝 Đang chuẩn bị dữ liệu thủ công...")
                         research_data = truncate_text(research_manual, 3000)
                         competitor_content = truncate_text(competitor_manual, 3000)
-                        raw_linkup = research_manual
-                        urls = ["Nguồn nhập thủ công"]
-                        
-                        with st.expander("🔍 Dữ liệu đã nhập", expanded=False):
-                            st.write(research_data)
-                            st.divider()
-                            st.markdown("**🛠️ Dữ liệu thô:**")
-                            st.write(raw_linkup)
-                    
-                    # 4. Analysis & Outline (Common Logic)
-                    status.update(label="📝 Đang lập dàn ý (Outline)...")
+                        st.session_state.articles[kw]['research'] = {"answer": "Nhập thủ công", "raw": research_manual}
+
+                    # 4. Analysis & Outline
+                    status_ui.update(label="📝 Đang lập dàn ý (Outline)...")
                     with open(rules_path, "r", encoding="utf-8") as f:
                         raw_rules = f.read()
                         rules = truncate_text(raw_rules, 3000)
                     
-                    # Create Mini Rules for Writing Phase
                     mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (200-500 words per section)."
                     if "## 6. Quick Reference Card" in raw_rules:
                         mini_rules = raw_rules[raw_rules.find("## 6. Quick Reference Card"):]
                     mini_rules = truncate_text(mini_rules, 800)
 
-                    st.info(f"📊 Debug Metrics: Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})")
+                    st.session_state.articles[kw]['metrics'] = f"Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})"
                     
                     outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate a CONCISE article outline (max 7-8 sections) in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
-                    outline_prompt = truncate_text(outline_prompt, 10000)
-                    
-                    # SỬ DỤNG STREAMING CHO DÀN Ý
-                    with st.chat_message("assistant"):
-                        st.markdown("🏗️ **Đang tạo dàn ý bài viết...**")
-                        outline_json_str = st.write_stream(call_ai_stream(outline_prompt))
-                    
-                    if outline_json_str.startswith("Error:"):
-                        status.update(label="❌ Lỗi khi lập dàn ý", state="error")
-                        st.stop()
-                        
-                    # Trích xuất và Tự động sửa lỗi JSON
-                    clean_json = extract_json(outline_json_str)
-                    repaired_json = repair_json(clean_json)
+                    outline_json_str = st.write_stream(call_ai_stream(truncate_text(outline_prompt, 10000)))
                     
                     try:
+                        clean_json = extract_json(outline_json_str)
+                        repaired_json = repair_json(clean_json)
                         outline_data = json.loads(repaired_json)
+                        st.session_state.articles[kw]['outline'] = outline_data['outline']
                     except Exception as e:
-                        st.error(f"Lỗi: AI trả về dàn ý không hợp lệ. Đã cố gắng tự sửa nhưng thất bại.")
-                        st.warning("Nội dung AI trả về (đã sửa):")
-                        st.code(repaired_json)
-                        st.stop()
+                        st.error(f"Lỗi dàn ý cho {kw}. Vui lòng thử lại.")
+                        continue
                     
                     # 5. Writing (Chunking)
-                    status.update(label="✍️ Đang viết bài (Chunking mode)...")
-                    full_content = ""
-                    for i, heading in enumerate(outline_data['outline']):
-                        status.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"SEO Rules: {mini_rules}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {full_content[-300:]}\n\nTASK: Write a deeply insightful SEO section in HTML (target 600-800 words). IMPORTANT: Finish the content and ALL tags properly. Be concise and high-quality to avoid truncation."
-                        write_prompt = truncate_text(write_prompt, 4000)
+                    status_ui.update(label="✍️ Đang viết bài...")
+                    for i, heading in enumerate(st.session_state.articles[kw]['outline']):
+                        status_ui.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
+                        write_prompt = f"SEO Rules: {mini_rules}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section in HTML (target 600-800 words). Finish all tags."
                         
-                        # Streaming UI
-                        with st.chat_message("assistant"):
-                            chunk = st.write_stream(call_ai_stream(write_prompt))
-                        
-                        if chunk.startswith("Error:"):
-                            st.warning(f"Bỏ qua phần '{heading['title']}' do lỗi AI.")
-                            continue
-                        full_content += f"\n\n{chunk}"
+                        chunk = st.write_stream(call_ai_stream(truncate_text(write_prompt, 4000)))
+                        st.session_state.articles[kw]['content'] += f"\n\n{chunk}"
                     
-                    status.update(label="✅ Hoàn thành!", state="complete")
-                    
-                    # Display Preview
-                    st.markdown("### Preview Content")
-                    st.html(full_content)
-                    
-                    # Export Buttons
+                    st.session_state.articles[kw]['status'] = "complete"
+                    status_ui.update(label="✅ Hoàn thành!", state="complete")
+
+    # --- DISPLAY PERSISTENT RESULTS ---
+    if st.session_state.articles:
+        st.divider()
+        st.header("📝 Kết quả đã tạo")
+        if st.button("🧹 Xóa tất cả kết quả"):
+            st.session_state.articles = {}
+            st.rerun()
+
+        for kw, data in st.session_state.articles.items():
+            with st.expander(f"📄 Bài viết: {kw} ({data['status']})", expanded=(data['status'] == "complete")):
+                if data['research']:
+                    st.info(f"📊 Debug Metrics: {data['metrics']}")
+                    with st.expander("🔍 Chi tiết nghiên cứu"):
+                        st.write(data['research'].get('answer', "N/A"))
+                        if 'raw' in data['research']:
+                            st.json(data['research']['raw'])
+                
+                st.markdown("### Nội dung bài viết")
+                st.html(data['content'])
+                
+                if data['status'] == "complete":
                     col_ex1, col_ex2 = st.columns(2)
-                    
-                    # WORD EXPORT
+                    # Word Export
                     doc = Document()
                     doc.add_heading(kw, 0)
-                    # Simple HTML to Word (very basic conversion)
-                    doc.add_paragraph(full_content)
+                    doc.add_paragraph(data['content'])
                     bio = BytesIO()
                     doc.save(bio)
-                    col_ex1.download_button(label="📥 Tải file .docx", data=bio.getvalue(), file_name=f"{kw}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                    
-                    # HTML EXPORT
-                    col_ex2.download_button(label="📥 Tải file .html", data=full_content, file_name=f"{kw}.html", mime="text/html")
+                    col_ex1.download_button(label=f"📥 Tải .docx ({kw})", data=bio.getvalue(), file_name=f"{kw}.docx")
+                    # HTML Export
+                    col_ex2.download_button(label=f"📥 Tải .html ({kw})", data=data['content'], file_name=f"{kw}.html")
 
 # --- TAB 3: HISTORY ---
 with tab3:
