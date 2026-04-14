@@ -92,6 +92,14 @@ with tab2:
 
 # --- CORE FUNCTIONS ---
 
+def truncate_text(text, max_chars=4000):
+    if not isinstance(text, str):
+        text = str(text)
+    if len(text) > max_chars:
+        return text[:max_chars] + "\n...[Nội dung đã bị cắt bớt để bảo toàn token]..."
+    return text
+
+
 def get_serp_results(keyword):
     url = "https://google.serper.dev/search"
     headers = {"X-API-KEY": st.session_state.api_keys['SERP'], "Content-Type": "application/json"}
@@ -122,8 +130,19 @@ def call_ai(prompt, system_prompt="You are an expert SEO Content Engineer."):
             {"role": "user", "content": prompt}
         ]
     }
-    response = requests.post(url, headers=headers, json=data)
-    return response.json()['choices'][0]['message']['content']
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=90)
+        if response.status_code != 200:
+            st.error(f"⚠️ API Error ({response.status_code}): {response.text[:300]}")
+            return f"Error: {response.text[:200]}"
+        
+        return response.json()['choices'][0]['message']['content']
+    except requests.exceptions.Timeout:
+        st.error("⚠️ Lỗi: Thời gian phản hồi từ AI quá lâu (Timeout).")
+        return "Error: Timeout"
+    except Exception as e:
+        st.error(f"⚠️ Lỗi hệ thống: {str(e)}")
+        return f"Error: {str(e)}"
 
 def linkup_research(keyword):
     url = "https://api.linkup.so/v1/search"
@@ -180,21 +199,32 @@ with tab1:
                     status.update(label="📄 Đang cào dữ liệu đối thủ...")
                     competitor_content = ""
                     for url in urls:
-                        competitor_content += f"\n--- Source: {url} ---\n" + scrape_url(url)
+                        scraped = scrape_url(url)
+                        competitor_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 1000)
                     
                     # 3. Research
                     status.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
-                    research_data = linkup_research(kw)
+                    research_data = truncate_text(linkup_research(kw), 4000)
                     
                     # 4. Analysis & Outline
                     status.update(label="📝 Đang lập dàn ý (Outline)...")
                     with open(rules_path, "r", encoding="utf-8") as f:
                         rules = f.read()
                     
-                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content[:2000]}\n\nKeyword: {kw}\n\nGenerate article outline in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
+                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate article outline in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
                     outline_json_str = call_ai(outline_prompt)
+                    
+                    if outline_json_str.startswith("Error:"):
+                        status.update(label="❌ Lỗi khi lập dàn ý", state="error")
+                        st.stop()
+                        
                     # Simple cleanup if AI returns extra text
-                    outline_data = json.loads(outline_json_str[outline_json_str.find('{'):outline_json_str.rfind('}')+1])
+                    try:
+                        outline_data = json.loads(outline_json_str[outline_json_str.find('{'):outline_json_str.rfind('}')+1])
+                    except:
+                        st.error("Lỗi: AI không trả về đúng định dạng JSON cho dàn ý.")
+                        st.code(outline_json_str)
+                        st.stop()
                     
                     # 5. Writing (Chunking)
                     status.update(label="✍️ Đang viết bài (Chunking mode)...")
@@ -203,6 +233,9 @@ with tab1:
                         status.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
                         write_prompt = f"Rules: {rules}\n\nHeading: {heading['title']}\n\nContext: {heading['points']}\n\nPrevious Content for flow: {full_content[-500:]}\n\nWrite extensive HTML content for this heading."
                         chunk = call_ai(write_prompt)
+                        if chunk.startswith("Error:"):
+                            st.warning(f"Bỏ qua phần '{heading['title']}' do lỗi AI.")
+                            continue
                         full_content += f"\n\n{chunk}"
                     
                     status.update(label="✅ Hoàn thành!", state="complete")
