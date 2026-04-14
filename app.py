@@ -300,7 +300,15 @@ with tab1:
         else:
             for kw in keywords:
                 if kw not in st.session_state.articles:
-                    st.session_state.articles[kw] = {"status": "processing", "research": {}, "outline": [], "content": "", "metrics": ""}
+                    st.session_state.articles[kw] = {
+                        "status": "processing", 
+                        "research": {}, 
+                        "outline": [], 
+                        "content": "", 
+                        "metrics": "", 
+                        "meta_title": "", 
+                        "meta_description": ""
+                    }
                 
                 with st.expander(f"⚙️ Đang xử lý: {kw}", expanded=True):
                     status_ui = st.status(f"Bắt đầu xử lý: {kw}")
@@ -365,14 +373,16 @@ with tab1:
 
                     st.session_state.articles[kw]['metrics'] = f"Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})"
                     
-                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate a CONCISE article outline (max 7-8 sections) in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
+                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate a CONCISE article outline and SEO metadata in JSON format: {{'meta_title': 'SEO Meta Title (<60 chars)', 'meta_description': 'SEO Meta Description (<160 chars)', 'outline': [{{'title': '...', 'points': [...]}}]}}"
                     outline_json_str = st.write_stream(call_ai_stream(truncate_text(outline_prompt, 10000)))
                     
                     try:
                         clean_json = extract_json(outline_json_str)
                         repaired_json = repair_json(clean_json)
                         outline_data = json.loads(repaired_json)
-                        st.session_state.articles[kw]['outline'] = outline_data['outline']
+                        st.session_state.articles[kw]['outline'] = outline_data.get('outline', [])
+                        st.session_state.articles[kw]['meta_title'] = outline_data.get('meta_title', '')
+                        st.session_state.articles[kw]['meta_description'] = outline_data.get('meta_description', '')
                     except Exception as e:
                         st.error(f"Lỗi dàn ý cho {kw}. Vui lòng thử lại.")
                         continue
@@ -406,6 +416,10 @@ with tab1:
                         if 'raw' in data['research']:
                             st.json(data['research']['raw'])
                 
+                if data['meta_title']:
+                    st.success(f"**SEO Meta Title:** {data['meta_title']}")
+                    st.info(f"**SEO Meta Description:** {data['meta_description']}")
+                
                 st.markdown("### Nội dung bài viết")
                 st.html(data['content'])
                 
@@ -413,13 +427,16 @@ with tab1:
                     col_ex1, col_ex2 = st.columns(2)
                     # Word Export
                     doc = Document()
-                    doc.add_heading(kw, 0)
+                    doc.add_heading(data['meta_title'] if data['meta_title'] else kw, 0)
+                    doc.add_paragraph(f"Meta Description: {data['meta_description']}")
+                    doc.add_paragraph("-" * 20)
                     doc.add_paragraph(data['content'])
                     bio = BytesIO()
                     doc.save(bio)
                     col_ex1.download_button(label=f"📥 Tải .docx ({kw})", data=bio.getvalue(), file_name=f"{kw}.docx")
                     # HTML Export
-                    col_ex2.download_button(label=f"📥 Tải .html ({kw})", data=data['content'], file_name=f"{kw}.html")
+                    html_full = f"<html><head><title>{data['meta_title']}</title><meta name='description' content='{data['meta_description']}'></head><body>{data['content']}</body></html>"
+                    col_ex2.download_button(label=f"📥 Tải .html ({kw})", data=html_full, file_name=f"{kw}.html")
 
 # --- TAB 3: HISTORY ---
 with tab3:
