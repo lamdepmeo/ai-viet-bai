@@ -140,6 +140,10 @@ def call_ai(prompt, system_prompt="You are an expert SEO Content Engineer."):
     except requests.exceptions.Timeout:
         st.error("⚠️ Lỗi: Thời gian phản hồi từ AI quá lâu (Timeout).")
         return "Error: Timeout"
+    except requests.exceptions.HTTPError as e:
+        if response.status_code in [502, 504]:
+            st.error("⚠️ Lỗi Gateway (502/504): Có thể Payload quá lớn hoặc Server AI đang bảo trì.")
+        return f"Error: {str(e)}"
     except Exception as e:
         st.error(f"⚠️ Lỗi hệ thống: {str(e)}")
         return f"Error: {str(e)}"
@@ -200,18 +204,24 @@ with tab1:
                     competitor_content = ""
                     for url in urls:
                         scraped = scrape_url(url)
-                        competitor_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 1000)
+                        competitor_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 500)
+                    competitor_content = truncate_text(competitor_content, 1500)
                     
                     # 3. Research
                     status.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
-                    research_data = truncate_text(linkup_research(kw), 4000)
+                    research_data = truncate_text(linkup_research(kw), 1500)
                     
                     # 4. Analysis & Outline
                     status.update(label="📝 Đang lập dàn ý (Outline)...")
                     with open(rules_path, "r", encoding="utf-8") as f:
-                        rules = f.read()
+                        rules = truncate_text(f.read(), 3000)
+                    
+                    st.info(f"📊 Debug Metrics: Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})")
                     
                     outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate article outline in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
+                    # Final aggressive safety truncation
+                    outline_prompt = truncate_text(outline_prompt, 8000)
+                    
                     outline_json_str = call_ai(outline_prompt)
                     
                     if outline_json_str.startswith("Error:"):
@@ -231,7 +241,9 @@ with tab1:
                     full_content = ""
                     for i, heading in enumerate(outline_data['outline']):
                         status.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"Rules: {rules}\n\nHeading: {heading['title']}\n\nContext: {heading['points']}\n\nPrevious Content for flow: {full_content[-500:]}\n\nWrite extensive HTML content for this heading."
+                        write_rules = truncate_text(rules, 2000) # Slightly smaller for chunks
+                        write_prompt = f"Rules: {write_rules}\n\nHeading: {heading['title']}\n\nContext: {heading['points']}\n\nPrevious Content for flow: {full_content[-500:]}\n\nWrite extensive HTML content for this heading."
+                        write_prompt = truncate_text(write_prompt, 6000)
                         chunk = call_ai(write_prompt)
                         if chunk.startswith("Error:"):
                             st.warning(f"Bỏ qua phần '{heading['title']}' do lỗi AI.")
