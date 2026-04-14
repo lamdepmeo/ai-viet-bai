@@ -178,7 +178,8 @@ def call_ai(prompt, system_prompt="You are an expert SEO Content Engineer."):
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        "max_tokens": 4000
     }
     try:
         response = requests.post(url, headers=headers, json=data, timeout=90)
@@ -210,7 +211,8 @@ def call_ai_stream(prompt, system_prompt="You are an expert SEO Content Engineer
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ],
-        "stream": True
+        "stream": True,
+        "max_tokens": 4000
     }
     try:
         response = requests.post(url, headers=headers, json=data, timeout=90, stream=True)
@@ -249,7 +251,7 @@ def linkup_research(keyword):
         "outputType": "sourcedAnswer"
     }
     response = requests.post(url, headers=headers, json=data)
-    return response.json().get('results', "No research found.")
+    return response.json()
 
 # --- TAB 1: WRITER ---
 with tab1:
@@ -313,7 +315,8 @@ with tab1:
                         
                         # 3. Research
                         status.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
-                        raw_linkup = linkup_research(kw)
+                        linkup_json = linkup_research(kw)
+                        raw_linkup = linkup_json.get('results', "No research found.")
                         research_data = truncate_text(raw_linkup, 1500)
                         
                         # HIỂN THỊ DỮ LIỆU NGHIÊN CỨU
@@ -322,8 +325,11 @@ with tab1:
                             for url in urls:
                                 st.write(f"- {url}")
                             st.divider()
-                            st.markdown("**🧬 Kết quả nghiên cứu Linkup:**")
+                            st.markdown("**🧬 Kết quả nghiên cứu Linkup (Processed):**")
                             st.write(raw_linkup)
+                            st.divider()
+                            st.markdown("**🛠️ Raw Linkup JSON (Debug):**")
+                            st.json(linkup_json)
                     else:
                         # MANUAL MODE DATA SETUP
                         status.update(label="📝 Đang chuẩn bị dữ liệu thủ công...")
@@ -334,6 +340,9 @@ with tab1:
                         
                         with st.expander("🔍 Dữ liệu đã nhập", expanded=False):
                             st.write(research_data)
+                            st.divider()
+                            st.markdown("**🛠️ Dữ liệu thô:**")
+                            st.write(raw_linkup)
                     
                     # 4. Analysis & Outline (Common Logic)
                     status.update(label="📝 Đang lập dàn ý (Outline)...")
@@ -378,7 +387,7 @@ with tab1:
                     full_content = ""
                     for i, heading in enumerate(outline_data['outline']):
                         status.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"SEO Rules: {mini_rules}\n\nHeading: {heading['title']}\n\nPoints to cover: {heading['points']}\n\nPrev Flow: {full_content[-300:]}\n\nWrite extensive HTML content."
+                        write_prompt = f"SEO Rules: {mini_rules}\n\nHeading: {heading['title']}\n\nPoints to cover: {heading['points']}\n\nPrev Flow: {full_content[-300:]}\n\nWrite a detailed, high-quality, and complete SEO section. Ensure the section is finished naturally without being truncated."
                         write_prompt = truncate_text(write_prompt, 4000)
                         
                         # Streaming UI
