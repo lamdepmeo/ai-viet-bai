@@ -54,11 +54,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- INITIALIZATION ---
+if 'api_keys' not in st.session_state:
     st.session_state.api_keys = {
         'AI': '',
         'SERP': '',
         'Linkup': ''
     }
+
 if 'articles' not in st.session_state:
     st.session_state.articles = {}
 
