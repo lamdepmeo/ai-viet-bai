@@ -334,6 +334,18 @@ with tab1:
                         }
                         research_data = truncate_text(raw_linkup, 2000)
                         competitor_content = comp_content
+                        
+                        # HIỂN THỊ DỮ LIỆU NGHIÊN CỨU NGAY LẬP TỨC
+                        with st.expander("🔍 Dữ liệu nghiên cứu (SERP & Linkup)", expanded=False):
+                            st.markdown("**🔗 Nguồn đối thủ (SERP):**")
+                            for url in urls:
+                                st.write(f"- {url}")
+                            st.divider()
+                            st.markdown("**🧬 Tóm tắt nghiên cứu Linkup:**")
+                            st.write(answer if answer else "Không có tóm tắt.")
+                            st.divider()
+                            st.markdown("**🛠️ Raw Linkup JSON (Debug):**")
+                            st.json(linkup_json)
                     else:
                         status_ui.update(label="📝 Đang chuẩn bị dữ liệu thủ công...")
                         research_data = truncate_text(research_manual, 3000)
