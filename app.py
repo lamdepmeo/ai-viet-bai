@@ -116,6 +116,39 @@ def extract_json(text):
     except:
         return text.strip()
 
+def repair_json(broken_json):
+    if not broken_json:
+        return ""
+    stack = []
+    in_string = False
+    escaped = False
+    
+    # Dọn dẹp sơ bộ
+    broken_json = broken_json.strip()
+    
+    for char in broken_json:
+        if char == '\\' and in_string:
+            escaped = not escaped
+            continue
+        if char == '"' and not escaped:
+            in_string = not in_string
+        if not in_string:
+            if char in '{[':
+                stack.append(char)
+            elif char in '}]':
+                if stack:
+                    if (char == '}' and stack[-1] == '{') or (char == ']' and stack[-1] == '['):
+                        stack.pop()
+        escaped = False
+    
+    if in_string:
+        broken_json += '"'
+    
+    while stack:
+        opener = stack.pop()
+        broken_json += '}' if opener == '{' else ']'
+    return broken_json
+
 
 def get_serp_results(keyword):
     url = "https://google.serper.dev/search"
@@ -316,7 +349,7 @@ with tab1:
 
                     st.info(f"📊 Debug Metrics: Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})")
                     
-                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate article outline in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
+                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate a CONCISE article outline (max 7-8 sections) in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
                     outline_prompt = truncate_text(outline_prompt, 10000)
                     
                     # SỬ DỤNG STREAMING CHO DÀN Ý
@@ -328,13 +361,16 @@ with tab1:
                         status.update(label="❌ Lỗi khi lập dàn ý", state="error")
                         st.stop()
                         
-                    # Trích xuất JSON an toàn
+                    # Trích xuất và Tự động sửa lỗi JSON
+                    clean_json = extract_json(outline_json_str)
+                    repaired_json = repair_json(clean_json)
+                    
                     try:
-                        clean_json = extract_json(outline_json_str)
-                        outline_data = json.loads(clean_json)
+                        outline_data = json.loads(repaired_json)
                     except Exception as e:
-                        st.error(f"Lỗi: AI không trả về đúng định dạng JSON cho dàn ý. {str(e)}")
-                        st.code(outline_json_str)
+                        st.error(f"Lỗi: AI trả về dàn ý không hợp lệ. Đã cố gắng tự sửa nhưng thất bại.")
+                        st.warning("Nội dung AI trả về (đã sửa):")
+                        st.code(repaired_json)
                         st.stop()
                     
                     # 5. Writing (Chunking)
