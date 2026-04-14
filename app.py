@@ -366,36 +366,64 @@ with tab1:
                         raw_rules = f.read()
                         rules = truncate_text(raw_rules, 3000)
                     
-                    mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (200-500 words per section)."
+                    mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (200-500 words per section). Cite research using <a> tags to Source URLs for EEAT."
                     if "## 6. Quick Reference Card" in raw_rules:
                         mini_rules = raw_rules[raw_rules.find("## 6. Quick Reference Card"):]
                     mini_rules = truncate_text(mini_rules, 800)
 
-                    st.session_state.articles[kw]['metrics'] = f"Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})"
+                    st.session_states_metrics = f"Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})"
+                    if 'metrics' in st.session_state.articles[kw]:
+                        st.session_state.articles[kw]['metrics'] = st.session_states_metrics
                     
-                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate a CONCISE article outline and SEO metadata in JSON format: {{'meta_title': 'SEO Meta Title (<60 chars)', 'meta_description': 'SEO Meta Description (<160 chars)', 'outline': [{{'title': '...', 'points': [...]}}]}}"
+                    outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': 'Hook+Direct Answer', 'ai_overview_todo': 'AI Summary Box (50-80 words)', 'key_takeaway_todo': '3-5 bullet points', 'headings': [{{'title': '...', 'points': '...'}}], 'faq': [{{'q': '...', 'a': '...'}}]}}"
                     outline_json_str = st.write_stream(call_ai_stream(truncate_text(outline_prompt, 10000)))
                     
                     try:
                         clean_json = extract_json(outline_json_str)
                         repaired_json = repair_json(clean_json)
                         outline_data = json.loads(repaired_json)
-                        st.session_state.articles[kw]['outline'] = outline_data.get('outline', [])
                         st.session_state.articles[kw]['meta_title'] = outline_data.get('meta_title', '')
                         st.session_state.articles[kw]['meta_description'] = outline_data.get('meta_description', '')
                     except Exception as e:
-                        st.error(f"Lỗi dàn ý cho {kw}. Vui lòng thử lại.")
+                        st.error(f"Lỗi dàn ý cho {kw}: {str(e)}")
                         continue
                     
-                    # 5. Writing (Chunking)
-                    status_ui.update(label="✍️ Đang viết bài...")
-                    for i, heading in enumerate(st.session_state.articles[kw]['outline']):
+                    # 5. Writing (Sequential Segments)
+                    status_ui.update(label="✍️ Đang viết bài (6-part standard)...")
+                    research_context = truncate_text(st.session_state.articles[kw]['research'].get('answer', '') + "\nURLs: " + ", ".join(st.session_state.articles[kw]['research'].get('urls', [])), 1500)
+                    
+                    # 5.1 Sapo
+                    status_ui.update(label="✍️ Đang viết Sapo...")
+                    sapo_p = f"Rules: {mini_rules}\n\nTask: Write Sapo (Hook+Direct Answer). Instruction: {outline_data.get('sapo_todo')}. Context: {research_context}"
+                    sapo = st.write_stream(call_ai_stream(truncate_text(sapo_p, 4000)))
+                    st.session_state.articles[kw]['content'] += f"{sapo}"
+                    
+                    # 5.2 AI Overview
+                    status_ui.update(label="✍️ Đang viết AI Overview...")
+                    box_p = f"Rules: {mini_rules}\n\nTask: Write AI Summary Box (50-80 words). Instruction: {outline_data.get('ai_overview_todo')}. Data: {research_context}"
+                    box = st.write_stream(call_ai_stream(truncate_text(box_p, 4000)))
+                    box_html = f"<div style='border: 2px solid #00c6ff; padding: 15px; border-radius: 10px; background: rgba(0, 198, 255, 0.05); margin: 20px 0;'><strong>🤖 AI Overview:</strong><br>{box}</div>"
+                    st.session_state.articles[kw]['content'] += box_html
+                    
+                    # 5.3 Key Takeaways
+                    status_ui.update(label="✍️ Đang viết Key Takeaways...")
+                    take_p = f"Task: Write Key Takeaways (bullet points). Instruction: {outline_data.get('key_takeaway_todo')}"
+                    take = st.write_stream(call_ai_stream(truncate_text(take_p, 2000)))
+                    st.session_state.articles[kw]['content'] += f"\n\n{take}"
+                    
+                    # 5.4 Body Headings
+                    for i, heading in enumerate(outline_data.get('headings', [])):
                         status_ui.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"SEO Rules: {mini_rules}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section in HTML (target 600-800 words). Finish all tags."
-                        
+                        write_prompt = f"SEO Rules: {mini_rules}\n\nResearch Context: {research_context}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section in HTML (600-800 words). Integrate 1-2 links. Finish all tags."
                         chunk = st.write_stream(call_ai_stream(truncate_text(write_prompt, 4000)))
                         st.session_state.articles[kw]['content'] += f"\n\n{chunk}"
                     
+                    # 5.5 FAQ
+                    status_ui.update(label="✍️ Đang viết FAQ...")
+                    faq_p = f"Rules: {mini_rules}\n\nTask: Write FAQ section (HTML). Questions: {outline_data.get('faq')}"
+                    faq = st.write_stream(call_ai_stream(truncate_text(faq_p, 4000)))
+                    st.session_state.articles[kw]['content'] += f"\n\n{faq}"
+
                     st.session_state.articles[kw]['status'] = "complete"
                     status_ui.update(label="✅ Hoàn thành!", state="complete")
 
