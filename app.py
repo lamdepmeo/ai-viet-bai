@@ -99,6 +99,23 @@ def truncate_text(text, max_chars=4000):
         return text[:max_chars] + "\n...[Nội dung đã bị cắt bớt để bảo toàn token]..."
     return text
 
+def extract_json(text):
+    try:
+        # Xử lý Markdown code blocks
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+        
+        # Tìm dấu ngoặc nhọn đầu và cuối
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1:
+            return text[start:end+1]
+        return text.strip()
+    except:
+        return text.strip()
+
 
 def get_serp_results(keyword):
     url = "https://google.serper.dev/search"
@@ -205,23 +222,37 @@ def linkup_research(keyword):
 with tab1:
     st.header("Trình tạo nội dung SEO")
     
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        manual_keywords = st.text_area("Nhập danh sách từ khóa (mỗi dòng 1 từ)", height=150)
-    with col2:
-        uploaded_file = st.file_uploader("Hoặc tải lên file CSV/XLSX", type=["csv", "xlsx"])
+    mode = st.radio("Chế độ vận hành:", ["🚀 Tự động (Full Workflow)", "✍️ Thủ công (Dán dữ liệu)"], horizontal=True)
 
     keywords = []
-    if manual_keywords:
-        keywords = [k.strip() for k in manual_keywords.split('\n') if k.strip()]
-    if uploaded_file:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
-        # Try to find 'Keyword' or 'Từ khóa' column
-        target_col = next((c for c in df.columns if c.lower() in ['keyword', 'từ khóa', 'tu khoa']), df.columns[0])
-        keywords.extend(df[target_col].tolist())
+    
+    if mode == "🚀 Tự động (Full Workflow)":
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            manual_keywords = st.text_area("Nhập danh sách từ khóa (mỗi dòng 1 từ)", height=150)
+        with col2:
+            uploaded_file = st.file_uploader("Hoặc tải lên file CSV/XLSX", type=["csv", "xlsx"])
+
+        if manual_keywords:
+            keywords = [k.strip() for k in manual_keywords.split('\n') if k.strip()]
+        if uploaded_file:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
+            target_col = next((c for c in df.columns if c.lower() in ['keyword', 'từ khóa', 'tu khoa']), df.columns[0])
+            keywords.extend(df[target_col].tolist())
+    else:
+        # MANUAL MODE INPUTS
+        kw_manual = st.text_input("Từ khóa chính (Keyword)")
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            research_manual = st.text_area("Dữ liệu nghiên cứu (Linkup/Scientific Data)", height=250, placeholder="Dán dữ liệu nghiên cứu khoa học tại đây...")
+        with col_m2:
+            competitor_manual = st.text_area("Nội dung đối thủ (Competitor Content)", height=250, placeholder="Dán nội dung đối thủ hoặc ý tưởng tại đây...")
+        
+        if kw_manual:
+            keywords = [kw_manual.strip()]
 
     if st.button("🚀 Bắt đầu Viết bài"):
         if not all(st.session_state.api_keys.values()):
@@ -233,24 +264,45 @@ with tab1:
                 with st.expander(f"⚙️ Đang xử lý: {kw}", expanded=True):
                     status = st.status(f"Bắt đầu xử lý: {kw}")
                     
-                    # 1. SERP
-                    status.update(label="🔍 Đang tìm kiếm SERP...")
-                    serp_results = get_serp_results(kw)
-                    urls = [r['link'] for r in serp_results[:3]] # Process top 3 for speed
+                    if mode == "🚀 Tự động (Full Workflow)":
+                        # 1. SERP
+                        status.update(label="🔍 Đang tìm kiếm SERP...")
+                        serp_results = get_serp_results(kw)
+                        urls = [r['link'] for r in serp_results[:3]]
+                        
+                        # 2. Scraping
+                        status.update(label="📄 Đang cào dữ liệu đối thủ...")
+                        competitor_content = ""
+                        for url in urls:
+                            scraped = scrape_url(url)
+                            competitor_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 500)
+                        competitor_content = truncate_text(competitor_content, 1500)
+                        
+                        # 3. Research
+                        status.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
+                        raw_linkup = linkup_research(kw)
+                        research_data = truncate_text(raw_linkup, 1500)
+                        
+                        # HIỂN THỊ DỮ LIỆU NGHIÊN CỨU
+                        with st.expander("🔍 Dữ liệu nghiên cứu (SERP & Linkup)", expanded=False):
+                            st.markdown("**🔗 Nguồn đối thủ (SERP):**")
+                            for url in urls:
+                                st.write(f"- {url}")
+                            st.divider()
+                            st.markdown("**🧬 Kết quả nghiên cứu Linkup:**")
+                            st.write(raw_linkup)
+                    else:
+                        # MANUAL MODE DATA SETUP
+                        status.update(label="📝 Đang chuẩn bị dữ liệu thủ công...")
+                        research_data = truncate_text(research_manual, 3000)
+                        competitor_content = truncate_text(competitor_manual, 3000)
+                        raw_linkup = research_manual
+                        urls = ["Nguồn nhập thủ công"]
+                        
+                        with st.expander("🔍 Dữ liệu đã nhập", expanded=False):
+                            st.write(research_data)
                     
-                    # 2. Scraping
-                    status.update(label="📄 Đang cào dữ liệu đối thủ...")
-                    competitor_content = ""
-                    for url in urls:
-                        scraped = scrape_url(url)
-                        competitor_content += f"\n--- Source: {url} ---\n" + truncate_text(scraped, 500)
-                    competitor_content = truncate_text(competitor_content, 1500)
-                    
-                    # 3. Research
-                    status.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
-                    research_data = truncate_text(linkup_research(kw), 1500)
-                    
-                    # 4. Analysis & Outline
+                    # 4. Analysis & Outline (Common Logic)
                     status.update(label="📝 Đang lập dàn ý (Outline)...")
                     with open(rules_path, "r", encoding="utf-8") as f:
                         raw_rules = f.read()
@@ -265,20 +317,23 @@ with tab1:
                     st.info(f"📊 Debug Metrics: Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})")
                     
                     outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate article outline in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
-                    # Balanced safety truncation (approx 10k chars fits well in 4.5k tokens)
                     outline_prompt = truncate_text(outline_prompt, 10000)
                     
-                    outline_json_str = call_ai(outline_prompt)
+                    # SỬ DỤNG STREAMING CHO DÀN Ý
+                    with st.chat_message("assistant"):
+                        st.markdown("🏗️ **Đang tạo dàn ý bài viết...**")
+                        outline_json_str = st.write_stream(call_ai_stream(outline_prompt))
                     
                     if outline_json_str.startswith("Error:"):
                         status.update(label="❌ Lỗi khi lập dàn ý", state="error")
                         st.stop()
                         
-                    # Simple cleanup if AI returns extra text
+                    # Trích xuất JSON an toàn
                     try:
-                        outline_data = json.loads(outline_json_str[outline_json_str.find('{'):outline_json_str.rfind('}')+1])
-                    except:
-                        st.error("Lỗi: AI không trả về đúng định dạng JSON cho dàn ý.")
+                        clean_json = extract_json(outline_json_str)
+                        outline_data = json.loads(clean_json)
+                    except Exception as e:
+                        st.error(f"Lỗi: AI không trả về đúng định dạng JSON cho dàn ý. {str(e)}")
                         st.code(outline_json_str)
                         st.stop()
                     
