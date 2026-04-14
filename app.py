@@ -316,8 +316,17 @@ with tab1:
                         # 3. Research
                         status.update(label="🧬 Đang nghiên cứu Linkup (Scientific)...")
                         linkup_json = linkup_research(kw)
-                        raw_linkup = linkup_json.get('results', "No research found.")
-                        research_data = truncate_text(raw_linkup, 1500)
+                        
+                        # TRÍCH XUẤT DỮ LIỆU TỪ LINKUP (SỬ DỤNG ANSWER + SOURCES)
+                        answer = linkup_json.get('answer', '')
+                        sources = linkup_json.get('sources', [])
+                        source_text = "\n".join([f"- {s.get('name')}: {s.get('snippet','')}" for s in sources[:5]])
+                        raw_linkup = f"Tóm tắt nghiên cứu: {answer}\n\nChi tiết nguồn tin:\n{source_text}"
+                        
+                        if not answer and not sources:
+                            raw_linkup = "No research found."
+                        
+                        research_data = truncate_text(raw_linkup, 2000)
                         
                         # HIỂN THỊ DỮ LIỆU NGHIÊN CỨU
                         with st.expander("🔍 Dữ liệu nghiên cứu (SERP & Linkup)", expanded=False):
@@ -325,8 +334,8 @@ with tab1:
                             for url in urls:
                                 st.write(f"- {url}")
                             st.divider()
-                            st.markdown("**🧬 Kết quả nghiên cứu Linkup (Processed):**")
-                            st.write(raw_linkup)
+                            st.markdown("**🧬 Tóm tắt nghiên cứu Linkup:**")
+                            st.write(answer if answer else "Không có tóm tắt.")
                             st.divider()
                             st.markdown("**🛠️ Raw Linkup JSON (Debug):**")
                             st.json(linkup_json)
@@ -387,7 +396,7 @@ with tab1:
                     full_content = ""
                     for i, heading in enumerate(outline_data['outline']):
                         status.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"SEO Rules: {mini_rules}\n\nHeading: {heading['title']}\n\nPoints to cover: {heading['points']}\n\nPrev Flow: {full_content[-300:]}\n\nWrite a detailed, high-quality, and complete SEO section. Ensure the section is finished naturally without being truncated."
+                        write_prompt = f"SEO Rules: {mini_rules}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {full_content[-300:]}\n\nTASK: Write a deeply insightful SEO section in HTML (target 600-800 words). IMPORTANT: Finish the content and ALL tags properly. Be concise and high-quality to avoid truncation."
                         write_prompt = truncate_text(write_prompt, 4000)
                         
                         # Streaming UI
