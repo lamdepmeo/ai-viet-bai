@@ -148,6 +148,45 @@ def call_ai(prompt, system_prompt="You are an expert SEO Content Engineer."):
         st.error(f"⚠️ Lỗi hệ thống: {str(e)}")
         return f"Error: {str(e)}"
 
+def call_ai_stream(prompt, system_prompt="You are an expert SEO Content Engineer."):
+    url = "https://llm.chiasegpu.vn/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {st.session_state.api_keys['AI']}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "claude-sonnet-4.6",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        "stream": True
+    }
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=90, stream=True)
+        if response.status_code != 200:
+            st.error(f"⚠️ API Error ({response.status_code}): {response.text[:300]}")
+            yield f"Error: {response.text[:200]}"
+            return
+
+        for line in response.iter_lines():
+            if line:
+                decoded_line = line.decode('utf-8').strip()
+                if decoded_line.startswith("data: "):
+                    content = decoded_line[6:]
+                    if content == "[DONE]":
+                        break
+                    try:
+                        json_data = json.loads(content)
+                        chunk = json_data['choices'][0]['delta'].get('content')
+                        if chunk:
+                            yield chunk
+                    except:
+                        continue
+    except Exception as e:
+        st.error(f"⚠️ Stream Error: {str(e)}")
+        yield f"Error: {str(e)}"
+
 def linkup_research(keyword):
     url = "https://api.linkup.so/v1/search"
     headers = {
@@ -214,13 +253,20 @@ with tab1:
                     # 4. Analysis & Outline
                     status.update(label="📝 Đang lập dàn ý (Outline)...")
                     with open(rules_path, "r", encoding="utf-8") as f:
-                        rules = truncate_text(f.read(), 3000)
+                        raw_rules = f.read()
+                        rules = truncate_text(raw_rules, 3000)
                     
+                    # Create Mini Rules for Writing Phase
+                    mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (200-500 words per section)."
+                    if "## 6. Quick Reference Card" in raw_rules:
+                        mini_rules = raw_rules[raw_rules.find("## 6. Quick Reference Card"):]
+                    mini_rules = truncate_text(mini_rules, 800)
+
                     st.info(f"📊 Debug Metrics: Rules({len(rules)}), Research({len(research_data)}), Competitors({len(competitor_content)})")
                     
                     outline_prompt = f"Rules: {rules}\n\nResearch Data: {research_data}\n\nCompetitor Ideas: {competitor_content}\n\nKeyword: {kw}\n\nGenerate article outline in JSON format: {{'outline': [{{'title': '...', 'points': [...]}}]}}"
-                    # Final aggressive safety truncation
-                    outline_prompt = truncate_text(outline_prompt, 8000)
+                    # Balanced safety truncation (approx 10k chars fits well in 4.5k tokens)
+                    outline_prompt = truncate_text(outline_prompt, 10000)
                     
                     outline_json_str = call_ai(outline_prompt)
                     
@@ -241,10 +287,13 @@ with tab1:
                     full_content = ""
                     for i, heading in enumerate(outline_data['outline']):
                         status.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_rules = truncate_text(rules, 2000) # Slightly smaller for chunks
-                        write_prompt = f"Rules: {write_rules}\n\nHeading: {heading['title']}\n\nContext: {heading['points']}\n\nPrevious Content for flow: {full_content[-500:]}\n\nWrite extensive HTML content for this heading."
-                        write_prompt = truncate_text(write_prompt, 6000)
-                        chunk = call_ai(write_prompt)
+                        write_prompt = f"SEO Rules: {mini_rules}\n\nHeading: {heading['title']}\n\nPoints to cover: {heading['points']}\n\nPrev Flow: {full_content[-300:]}\n\nWrite extensive HTML content."
+                        write_prompt = truncate_text(write_prompt, 4000)
+                        
+                        # Streaming UI
+                        with st.chat_message("assistant"):
+                            chunk = st.write_stream(call_ai_stream(write_prompt))
+                        
                         if chunk.startswith("Error:"):
                             st.warning(f"Bỏ qua phần '{heading['title']}' do lỗi AI.")
                             continue
