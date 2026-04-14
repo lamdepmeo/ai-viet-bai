@@ -152,6 +152,42 @@ def repair_json(broken_json):
         broken_json += '}' if opener == '{' else ']'
     return broken_json
 
+def clean_ai_html(text):
+    """Remove markdown code blocks like ```html or ``` from AI output."""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text
+
+def export_to_docx(html_content, keyword, meta_title="", meta_description=""):
+    """Convert HTML structure to professional Word document."""
+    doc = Document()
+    doc.add_heading(meta_title if meta_title else keyword, 0)
+    if meta_description:
+        doc.add_paragraph(f"SEO Meta Description: {meta_description}")
+        doc.add_paragraph("-" * 30)
+    
+    soup = BeautifulSoup(html_content, "html.parser")
+    # Duyệt qua các thẻ con trực tiếp của body hoặc tệp tin
+    for tag in soup.find_all(True):
+        if tag.name == 'h2':
+            doc.add_heading(tag.get_text(), level=1)
+        elif tag.name == 'h3':
+            doc.add_heading(tag.get_text(), level=2)
+        elif tag.name == 'p':
+            if tag.parent.name not in ['li']: # Tránh lặp lại thẻ trong danh sách
+                doc.add_paragraph(tag.get_text())
+        elif tag.name == 'li':
+            doc.add_paragraph(tag.get_text(), style='List Bullet')
+    
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
 
 def get_serp_results(keyword):
     url = "https://google.serper.dev/search"
@@ -394,35 +430,36 @@ with tab1:
                     
                     # 5.1 Sapo
                     status_ui.update(label="✍️ Đang viết Sapo...")
-                    sapo_p = f"Rules: {mini_rules}\n\nTask: Write Sapo (Hook+Direct Answer). Instruction: {outline_data.get('sapo_todo')}. Context: {research_context}"
+                    sapo_p = f"Rules: {mini_rules}\n\nTask: Write Sapo (Hook+Direct Answer). Data: {research_context}. \nSTRICT: Output RAW HTML ONLY. NO MARKDOWN."
                     sapo = st.write_stream(call_ai_stream(truncate_text(sapo_p, 4000)))
-                    st.session_state.articles[kw]['content'] += f"{sapo}"
+                    st.session_state.articles[kw]['content'] += f"{clean_ai_html(sapo)}"
                     
                     # 5.2 AI Overview
                     status_ui.update(label="✍️ Đang viết AI Overview...")
-                    box_p = f"Rules: {mini_rules}\n\nTask: Write AI Summary Box (50-80 words). Instruction: {outline_data.get('ai_overview_todo')}. Data: {research_context}"
+                    box_p = f"Rules: {mini_rules}\n\nTask: Write AI Summary Box (50-80 words). Data: {research_context}. \nSTRICT: Output RAW HTML ONLY."
                     box = st.write_stream(call_ai_stream(truncate_text(box_p, 4000)))
+                    box = clean_ai_html(box)
                     box_html = f"<div style='border: 2px solid #00c6ff; padding: 15px; border-radius: 10px; background: rgba(0, 198, 255, 0.05); margin: 20px 0;'><strong>🤖 AI Overview:</strong><br>{box}</div>"
                     st.session_state.articles[kw]['content'] += box_html
                     
                     # 5.3 Key Takeaways
                     status_ui.update(label="✍️ Đang viết Key Takeaways...")
-                    take_p = f"Task: Write Key Takeaways (bullet points). Instruction: {outline_data.get('key_takeaway_todo')}"
+                    take_p = f"Task: Write Key Takeaways (bullet points). Data: {research_context}. \nSTRICT: Output RAW HTML ONLY."
                     take = st.write_stream(call_ai_stream(truncate_text(take_p, 2000)))
-                    st.session_state.articles[kw]['content'] += f"\n\n{take}"
+                    st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(take)}"
                     
                     # 5.4 Body Headings
                     for i, heading in enumerate(outline_data.get('headings', [])):
                         status_ui.update(label=f"✍️ Đang viết phần {i+1}: {heading['title']}")
-                        write_prompt = f"SEO Rules: {mini_rules}\n\nResearch Context: {research_context}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section in HTML (600-800 words). Integrate 1-2 links. Finish all tags."
+                        write_prompt = f"Rules: {mini_rules}\n\nContext: {research_context}\n\nHeading: {heading['title']}\n\nPoints: {heading['points']}\n\nPrev: {st.session_state.articles[kw]['content'][-300:]}\n\nTASK: Write a deeply insightful SEO section in HTML (target 400-600 words). Integrate links. \nIMPORTANT: Finish all tags. RAW HTML ONLY, NO MARKDOWN CODE BLOCKS."
                         chunk = st.write_stream(call_ai_stream(truncate_text(write_prompt, 4000)))
-                        st.session_state.articles[kw]['content'] += f"\n\n{chunk}"
+                        st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(chunk)}"
                     
                     # 5.5 FAQ
                     status_ui.update(label="✍️ Đang viết FAQ...")
-                    faq_p = f"Rules: {mini_rules}\n\nTask: Write FAQ section (HTML). Questions: {outline_data.get('faq')}"
+                    faq_p = f"Rules: {mini_rules}\n\nTask: Write FAQ section (HTML). Questions: {outline_data.get('faq')}. RAW HTML ONLY."
                     faq = st.write_stream(call_ai_stream(truncate_text(faq_p, 4000)))
-                    st.session_state.articles[kw]['content'] += f"\n\n{faq}"
+                    st.session_state.articles[kw]['content'] += f"\n\n{clean_ai_html(faq)}"
 
                     st.session_state.articles[kw]['status'] = "complete"
                     status_ui.update(label="✅ Hoàn thành!", state="complete")
@@ -453,17 +490,12 @@ with tab1:
                 
                 if data['status'] == "complete":
                     col_ex1, col_ex2 = st.columns(2)
-                    # Word Export
-                    doc = Document()
-                    doc.add_heading(data['meta_title'] if data['meta_title'] else kw, 0)
-                    doc.add_paragraph(f"Meta Description: {data['meta_description']}")
-                    doc.add_paragraph("-" * 20)
-                    doc.add_paragraph(data['content'])
-                    bio = BytesIO()
-                    doc.save(bio)
-                    col_ex1.download_button(label=f"📥 Tải .docx ({kw})", data=bio.getvalue(), file_name=f"{kw}.docx")
-                    # HTML Export
-                    html_full = f"<html><head><title>{data['meta_title']}</title><meta name='description' content='{data['meta_description']}'></head><body>{data['content']}</body></html>"
+                    # Word Export Professional
+                    docx_data = export_to_docx(data['content'], kw, data['meta_title'], data['meta_description'])
+                    col_ex1.download_button(label=f"📥 Tải .docx ({kw})", data=docx_data, file_name=f"{kw}.docx")
+                    
+                    # HTML Export Clean
+                    html_full = f"<html><head><meta charset='utf-8'><title>{data['meta_title']}</title><meta name='description' content='{data['meta_description']}'></head><body>{data['content']}</body></html>"
                     col_ex2.download_button(label=f"📥 Tải .html ({kw})", data=html_full, file_name=f"{kw}.html")
 
 # --- TAB 3: HISTORY ---
