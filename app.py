@@ -4,6 +4,7 @@ import requests
 import time
 import json
 import os
+from datetime import datetime
 from bs4 import BeautifulSoup
 from docx import Document
 from io import BytesIO
@@ -188,6 +189,24 @@ def export_to_docx(html_content, keyword, meta_title="", meta_description=""):
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
+
+HISTORY_FILE = "article_history.json"
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except:
+                return []
+    return []
+
+def save_to_history(article):
+    history = load_history()
+    article['created_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    history.append(article)
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
 
 def get_serp_results(keyword):
     url = "https://google.serper.dev/search"
@@ -463,6 +482,14 @@ with tab1:
 
                     st.session_state.articles[kw]['status'] = "complete"
                     status_ui.update(label="✅ Hoàn thành!", state="complete")
+                    
+                    # AUTO SAVE TO PERMANENT HISTORY
+                    save_to_history({
+                        "keyword": kw,
+                        "meta_title": st.session_state.articles[kw]['meta_title'],
+                        "meta_description": st.session_state.articles[kw]['meta_description'],
+                        "content": st.session_state.articles[kw]['content']
+                    })
 
     # --- DISPLAY PERSISTENT RESULTS ---
     if st.session_state.articles:
@@ -500,5 +527,37 @@ with tab1:
 
 # --- TAB 3: HISTORY ---
 with tab3:
-    st.header("Lịch sử bài viết")
-    st.write("Dữ liệu sẽ được lưu tại đây trong các phiên tiếp theo.")
+    st.header("🕒 Lịch sử bài viết vĩnh viễn")
+    history_data = load_history()
+    
+    if not history_data:
+        st.info("Chưa có bài viết nào trong lịch sử.")
+    else:
+        st.write(f"Đang có {len(history_data)} bài viết đã được lưu trữ.")
+        
+        # Clear History Logic
+        with st.expander("🛠️ Quản lý kho lưu trữ", expanded=False):
+            confirm = st.checkbox("Tôi xác nhận muốn xóa vĩnh viễn toàn bộ lịch sử")
+            if st.button("🗑️ Xóa sạch vĩnh viễn", disabled=not confirm):
+                if os.path.exists(HISTORY_FILE):
+                    os.remove(HISTORY_FILE)
+                st.success("Đã xóa sạch lịch sử!")
+                st.rerun()
+
+        st.divider()
+        
+        # Display history items in reverse (newest first)
+        for item in reversed(history_data):
+            kw_name = item.get('keyword', 'N/A')
+            created_at = item.get('created_at', 'N/A')
+            with st.expander(f"📅 {created_at} | 🔑 {kw_name}"):
+                st.success(f"**Title:** {item.get('meta_title', 'N/A')}")
+                st.markdown(item.get('content', ''), unsafe_allow_html=True)
+                
+                col1, col2 = st.columns(2)
+                # Word Export
+                docx_hist = export_to_docx(item.get('content', ''), kw_name, item.get('meta_title', ''), item.get('meta_description', ''))
+                col1.download_button(label="📥 Tải .docx", data=docx_hist, file_name=f"{kw_name}.docx", key=f"dl_docx_{created_at}")
+                # HTML Export
+                html_hist = f"<html><head><meta charset='utf-8'><title>{item.get('meta_title')}</title></head><body>{item.get('content')}</body></html>"
+                col2.download_button(label="📥 Tải .html", data=html_hist, file_name=f"{kw_name}.html", key=f"dl_html_{created_at}")
