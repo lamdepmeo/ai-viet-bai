@@ -381,8 +381,8 @@ TASK: Create a professional SEO content outline.
   "language": "...",
   "meta_title": "...", 
   "meta_description": "...",
-  "headings": [{"title": "...", "points": "..."}],
-  "faq": [{"q": "...", "a": "..."}]
+  "headings": [{{"title": "...", "points": "..."}}],
+  "faq": [{{"q": "...", "a": "..."}}]
 }}"""
         outline_res = ""
         for chunk in call_ai_stream(outline_p, api_keys['AI']): outline_res += chunk
