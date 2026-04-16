@@ -1,8 +1,7 @@
 [server]
-# Vô hiệu hóa tính năng theo dõi tệp để không bị lỗi bộ nhớ (inotify)
+# Disable run-on-save to resolve inotify limit issues
 runOnSave = false
-fileWatcherType = "none"
 
 [client]
-# Tối ưu giao diện
+# Improve performance
 toolbarMode = "minimal"
