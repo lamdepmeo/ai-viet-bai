@@ -1,0 +1,8 @@
+[server]
+# Vô hiệu hóa tính năng theo dõi tệp để không bị lỗi bộ nhớ (inotify)
+runOnSave = false
+fileWatcherType = "none"
+
+[client]
+# Tối ưu giao diện
+toolbarMode = "minimal"
