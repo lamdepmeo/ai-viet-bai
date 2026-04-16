@@ -591,7 +591,7 @@ with tab1:
         if st.button("🔄 Làm mới thủ công"):
             st.rerun()
         
-        time.sleep(5)
+        time.sleep(10)
         st.rerun()
 
     # --- DISPLAY PERSISTENT RESULTS ---
