@@ -215,9 +215,9 @@ def save_to_history(article):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=4)
 
-def get_serp_results(keyword):
+def get_serp_results(keyword, api_key):
     url = "https://google.serper.dev/search"
-    headers = {"X-API-KEY": st.session_state.api_keys['SERP'], "Content-Type": "application/json"}
+    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
     data = json.dumps({"q": keyword, "num": 10})
     response = requests.post(url, headers=headers, data=data)
     return response.json().get('organic', [])
@@ -232,10 +232,10 @@ def scrape_url(url):
     except Exception as e:
         return f"Error scraping {url}: {str(e)}"
 
-def call_ai(prompt, system_prompt="You are an expert SEO Content Engineer."):
+def call_ai(prompt, api_key, system_prompt="You are an expert SEO Content Engineer."):
     url = "https://llm.chiasegpu.vn/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {st.session_state.api_keys['AI']}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     data = {
@@ -263,6 +263,54 @@ def call_ai(prompt, system_prompt="You are an expert SEO Content Engineer."):
     except Exception as e:
         st.error(f"⚠️ Lỗi hệ thống: {str(e)}")
         return f"Error: {str(e)}"
+
+def call_ai_stream(prompt, api_key, system_prompt="You are an expert SEO Content Engineer."):
+    url = "https://llm.chiasegpu.vn/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "claude-sonnet-4.6",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        "stream": True,
+        "max_tokens": 4000
+    }
+    
+    response = None
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=90, stream=True)
+        if response.status_code != 200:
+            yield f"Error: {response.text[:200]}"
+            return
+
+        for line in response.iter_lines():
+            if line:
+                decoded_line = line.decode('utf-8').strip()
+                if decoded_line.startswith("data: "):
+                    content = decoded_line[6:]
+                    if content == "[DONE]":
+                        break
+                    try:
+                        json_data = json.loads(content)
+                        chunk = json_data['choices'][0]['delta'].get('content')
+                        if chunk:
+                            yield chunk
+                    except:
+                        continue
+    except GeneratorExit:
+        return 
+    except Exception as e:
+        yield f" [Error: {str(e)}]"
+    finally:
+        if response:
+            try:
+                response.close()
+            except:
+                pass
 
 def update_task_status(kw, status_data):
     """Save current task progress to disk."""
@@ -292,7 +340,7 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
         update_task_status(kw, status_data)
         eng_p = f"Translate the keyword '{kw}' into a precise scientific research query in English. Output ONLY the query string."
         eng_query = ""
-        for chunk in call_ai_stream(eng_p): eng_query += chunk
+        for chunk in call_ai_stream(eng_p, api_keys['AI']): eng_query += chunk
         eng_query = clean_ai_html(eng_query.strip()) or kw
 
         # 2. Research
@@ -301,7 +349,7 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
             update_task_status(kw, status_data)
             
             # Serp
-            serp_results = get_serp_results(kw)
+            serp_results = get_serp_results(kw, api_keys['SERP'])
             urls = [r['link'] for r in serp_results[:3]]
             
             # Scrape
@@ -312,7 +360,7 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
             comp_content = truncate_text(comp_content, 1500)
             
             # Linkup
-            linkup_json = linkup_research(eng_query)
+            linkup_json = linkup_research(eng_query, api_keys['Linkup'])
             status_data["research"] = {
                 "answer": linkup_json.get('answer', ''), 
                 "urls": [s.get('url') for s in linkup_json.get('sources', [])],
@@ -336,7 +384,7 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
 
         outline_p = f"Rules: {raw_rules}\nKeyword: {kw}\nGenerate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': '...', 'ai_overview_todo': '...', 'key_takeaway_todo': '...', 'headings': [{{'title': '...', 'points': '...'}}], 'faq': [{{'q': '...', 'a': '...'}}]}}"
         outline_res = ""
-        for chunk in call_ai_stream(outline_p): outline_res += chunk
+        for chunk in call_ai_stream(outline_p, api_keys['AI']): outline_res += chunk
         try:
             outline_data = json.loads(repair_json(extract_json(outline_res)))
             status_data["meta_title"] = outline_data.get('meta_title', '')
@@ -360,7 +408,7 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
             status_data["log"] = f"Đang viết: {name}"
             update_task_status(kw, status_data)
             seg_out = ""
-            for chunk in call_ai_stream(p): seg_out += chunk
+            for chunk in call_ai_stream(p, api_keys['AI']): seg_out += chunk
             clean_out = clean_ai_html(seg_out)
             if name == "AI Overview":
                 clean_out = f"<div style='border: 2px solid #00c6ff; padding: 15px; border-radius: 10px; background: rgba(0, 198, 255, 0.05); margin: 20px 0;'><strong>🤖 AI Overview:</strong><br>{clean_out}</div>"
@@ -373,7 +421,7 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
             update_task_status(kw, status_data)
             h_p = f"Heading: {h['title']}\nPoints: {h['points']}\nContext: {research_context}\n{lang_instr}\nSTRICT: NO <a> tags. HTM ONLY."
             h_out = ""
-            for chunk in call_ai_stream(h_p): h_out += chunk
+            for chunk in call_ai_stream(h_p, api_keys['AI']): h_out += chunk
             status_data["content"] += f"\n\n{clean_ai_html(h_out)}"
             update_task_status(kw, status_data)
 
@@ -382,7 +430,7 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
         update_task_status(kw, status_data)
         final_p = f"Task: Write FAQ and Reference list based on {status_data['research']['urls']}. {lang_instr}"
         final_out = ""
-        for chunk in call_ai_stream(final_p): final_out += chunk
+        for chunk in call_ai_stream(final_p, api_keys['AI']): final_out += chunk
         status_data["content"] += f"\n\n{clean_ai_html(final_out)}"
         
         # Complete
@@ -403,10 +451,10 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
         status_data["log"] = f"Lỗi: {str(e)}"
         update_task_status(kw, status_data)
 
-def linkup_research(keyword):
+def linkup_research(keyword, api_key):
     url = "https://api.linkup.so/v1/search"
     headers = {
-        "Authorization": f"Bearer {st.session_state.api_keys['Linkup']}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     data = {
