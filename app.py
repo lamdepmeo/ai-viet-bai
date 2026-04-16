@@ -361,66 +361,101 @@ def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rule
             comp_content = serp_manual
 
         # 3. Outline
-        status_data["log"] = "Đang lập dàn ý..."
+        status_data["log"] = "Đang lập dàn ý (Outline)..."
         update_task_status(kw, status_data)
         with open(rules_path, "r", encoding="utf-8") as f:
             raw_rules = f.read()
         
-        mini_rules = "SEO Standards: Use HTML, direct answers, Entity-first, chunking (400-600 words). STRICT: NO <a> tags in body text."
-        if "## 6. Quick Reference Card" in raw_rules:
-            mini_rules = raw_rules[raw_rules.find("## 6. Quick Reference Card"):]
-        mini_rules = truncate_text(mini_rules, 800)
+        # Determine language first
+        lang_p = f"Based on the keyword '{kw}', identify its language. Translate English research data into this language for the outline. Output JSON."
+        
+        outline_p = f"""SEO RULES: {truncate_text(raw_rules, 3000)}
+KEYWORD: {kw}
+RESEARCH DATA: {status_data['research']['answer']}
 
-        outline_p = f"Rules: {raw_rules}\nKeyword: {kw}\nGenerate JSON: {{'meta_title': '...', 'meta_description': '...', 'sapo_todo': '...', 'ai_overview_todo': '...', 'key_takeaway_todo': '...', 'headings': [{{'title': '...', 'points': '...'}}], 'faq': [{{'q': '...', 'a': '...'}}]}}"
+TASK: Create a professional SEO content outline.
+1. Identify keyword language.
+2. Structure: Sapo, AI Overview Box, Key Takeaways, Body Headings (4-6), FAQ, References.
+3. Output strictly valid JSON:
+{{
+  "language": "...",
+  "meta_title": "...", 
+  "meta_description": "...",
+  "headings": [{"title": "...", "points": "..."}],
+  "faq": [{"q": "...", "a": "..."}]
+}}"""
         outline_res = ""
         for chunk in call_ai_stream(outline_p, api_keys['AI']): outline_res += chunk
         try:
             outline_data = json.loads(repair_json(extract_json(outline_res)))
             status_data["meta_title"] = outline_data.get('meta_title', '')
             status_data["meta_description"] = outline_data.get('meta_description', '')
+            target_lang = outline_data.get('language', 'Vietnamese')
+            update_task_status(kw, status_data)
         except:
-            status_data["log"] = "Lỗi tạo dàn ý."
+            status_data["log"] = "Lỗi tạo dàn ý. Kiểm tra API."
             update_task_status(kw, status_data)
             return
 
-        # 4. Writing
-        research_context = f"Summary: {status_data['research']['answer']}\nSources: {status_data['research']['urls']}"
-        lang_instr = f"Language: Identify '{kw}''s language. Use it. Translate English research data."
+        # 4. Sequential Writing (Strict Structure)
+        research_context = f"Research Summary: {status_data['research']['answer']}\nSource List: {status_data['research']['urls']}"
+        lang_instr = f"CRITICAL: Write everything in {target_lang}. Translate all English concepts naturally."
 
-        # Segments
+        # Segment definitions
         segments = [
-            ("Sapo", f"Task: Sapo. Data: {research_context}. {lang_instr}"),
-            ("AI Overview", f"Task: AI Box. Data: {research_context}. {lang_instr}"),
-            ("Key Takeaways", f"Task: Takeaways. {lang_instr}"),
+            ("Sapo", f"Task: Write a high-intent Sapo (3-4 sentences) including a direct hook answers for the keyword. Rules: No <a> tags. {lang_instr}\nContext: {research_context}"),
+            ("AI Overview", f"Task: Write a compact 'AI Overview' summary (50-80 words). {lang_instr}\nContext: {research_context}"),
+            ("Key Takeaways", f"Task: Summarize 3-5 key scientific takeaways in a bulleted list. {lang_instr}\nContext: {research_context}"),
         ]
+
+        # Process Segments
         for name, p in segments:
             status_data["log"] = f"Đang viết: {name}"
             update_task_status(kw, status_data)
             seg_out = ""
             for chunk in call_ai_stream(p, api_keys['AI']): seg_out += chunk
             clean_out = clean_ai_html(seg_out)
+            
             if name == "AI Overview":
-                clean_out = f"<div style='border: 2px solid #00c6ff; padding: 15px; border-radius: 10px; background: rgba(0, 198, 255, 0.05); margin: 20px 0;'><strong>🤖 AI Overview:</strong><br>{clean_out}</div>"
+                clean_out = f'<div style="border: 2px solid #00c6ff; padding: 15px; border-radius: 10px; background: rgba(0, 198, 255, 0.05); margin: 20px 0;"><strong>🤖 AI Overview:</strong><br>{clean_out}</div>'
+            elif name == "Key Takeaways":
+                clean_out = f"<h3>Key Takeaways</h3>\n{clean_out}"
+            
             status_data["content"] += f"\n\n{clean_out}"
             update_task_status(kw, status_data)
 
-        # Headings
+        # Body Headings (One by one)
         for i, h in enumerate(outline_data.get('headings', [])):
             status_data["log"] = f"Đang viết Heading {i+1}: {h['title']}"
             update_task_status(kw, status_data)
-            h_p = f"Heading: {h['title']}\nPoints: {h['points']}\nContext: {research_context}\n{lang_instr}\nSTRICT: NO <a> tags. HTM ONLY."
-            h_out = ""
+            
+            h_p = f"""Task: Write a deep-dive SEO section for heading '{h['title']}'.
+Points to cover: {h['points']}
+Context: {research_context}
+Language: {target_lang}
+Rules: RAW HTML ONLY. Use <h4> for points if needed. STRICT: NO <a> tags. Cite sources as PLAIN TEXT (e.g. According to NCBI)."""
+            
+            h_out = f"<h2>{h['title']}</h2>\n"
             for chunk in call_ai_stream(h_p, api_keys['AI']): h_out += chunk
             status_data["content"] += f"\n\n{clean_ai_html(h_out)}"
             update_task_status(kw, status_data)
 
-        # FAQ & References
-        status_data["log"] = "Đang hoàn thiện FAQ & References..."
+        # FAQ
+        status_data["log"] = "Đang viết FAQ..."
         update_task_status(kw, status_data)
-        final_p = f"Task: Write FAQ and Reference list based on {status_data['research']['urls']}. {lang_instr}"
-        final_out = ""
-        for chunk in call_ai_stream(final_p, api_keys['AI']): final_out += chunk
-        status_data["content"] += f"\n\n{clean_ai_html(final_out)}"
+        faq_p = f"Task: Write a structured FAQ section based on research. Use <h3> for questions. {lang_instr}\nQuestions: {outline_data.get('faq')}"
+        faq_out = "<h2>Frequently Asked Questions</h2>\n"
+        for chunk in call_ai_stream(faq_p, api_keys['AI']): faq_out += chunk
+        status_data["content"] += f"\n\n{clean_ai_html(faq_out)}"
+        update_task_status(kw, status_data)
+
+        # References
+        status_data["log"] = "Đang tạo danh mục nguồn tham khảo..."
+        update_task_status(kw, status_data)
+        ref_p = f"Task: Create a 'References' section. List 3-5 authoritative source URLs from the following research as <a> links. {lang_instr}\nData: {research_context}"
+        ref_out = "<h2>References</h2>\n"
+        for chunk in call_ai_stream(ref_p, api_keys['AI']): ref_out += chunk
+        status_data["content"] += f"\n\n{clean_ai_html(ref_out)}"
         
         # Complete
         status_data["status"] = "complete"
@@ -531,18 +566,32 @@ with tab1:
                     if "dàn ý" in l_lower: prog = 0.5
                     if "đang viết" in l_lower: prog = 0.8
                     if "✅" in t_status['log']: prog = 1.0
-                    
                     st.progress(prog)
+
+                    # SHOW RESEARCH IF AVAILABLE
+                    if t_status.get('research') and t_status['research'].get('answer'):
+                        with st.expander("🔬 Dữ liệu nghiên cứu (Research Results)"):
+                            st.write(t_status['research']['answer'])
+                            if t_status['research'].get('urls'):
+                                st.markdown("**🔗 Nguồn tham khảo:**")
+                                for u in t_status['research']['urls']:
+                                    st.write(f"- {u}")
+
+                    # SHOW OUTLINE IF AVAILABLE
+                    if t_status.get('meta_title'):
+                        with st.expander("📝 Dàn ý SEO (Outline)"):
+                            st.success(f"**Meta Title:** {t_status['meta_title']}")
+                            st.info(f"**Meta Description:** {t_status['meta_description']}")
+
                     if t_status['content']:
-                        st.info("💡 Nội dung đang được cập nhật liên tục từ server...")
-                        # Show latest fragment of content
-                        st.markdown(t_status['content'][-1500:], unsafe_allow_html=True)
+                        st.info("💡 Nội dung bài viết (Live Preview):")
+                        # Show content in a scrollable area
+                        st.markdown(f'<div style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 15px; border-radius: 10px;">{t_status["content"]}</div>', unsafe_allow_html=True)
         
         if st.button("🔄 Làm mới thủ công"):
             st.rerun()
         
-        # Auto-refresh pulse to keep the UI alive while writing
-        time.sleep(4)
+        time.sleep(5)
         st.rerun()
 
     # --- DISPLAY PERSISTENT RESULTS ---
