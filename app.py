@@ -319,11 +319,18 @@ def update_task_status(kw, status_data):
         json.dump(status_data, f, ensure_ascii=False, indent=4)
 
 def load_task_status(kw):
-    """Load current task progress from disk."""
+    """Load current task progress from disk with error handling for race conditions."""
     path = os.path.join(RUNNING_DIR, f"{kw}.json")
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if not content:
+                    return None
+                return json.loads(content)
+        except (json.JSONDecodeError, Exception):
+            # File might be empty or being written by the background thread
+            return None
     return None
 
 def background_worker(kw, api_keys, mode, serp_manual="", linkup_manual="", rules_path="seo_geo_rules.md"):
