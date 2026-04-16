@@ -15,7 +15,8 @@ st.set_page_config(page_title="SEO & GEO Content Engineer", layout="wide", page_
 
 # --- CONSTANTS ---
 HISTORY_FILE = "article_history.json"
-RUNNING_DIR = "running_tasks"
+# Hide from Streamlit watcher to avoid inotify limit
+RUNNING_DIR = ".running_tasks"
 if not os.path.exists(RUNNING_DIR):
     os.makedirs(RUNNING_DIR)
 
@@ -265,52 +266,33 @@ def call_ai(prompt, api_key, system_prompt="You are an expert SEO Content Engine
         return f"Error: {str(e)}"
 
 def call_ai_stream(prompt, api_key, system_prompt="You are an expert SEO Content Engineer."):
+    """Generator to stream AI responses. Securely handles API keys for background threads."""
     url = "https://llm.chiasegpu.vn/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "claude-sonnet-4.6",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        "stream": True,
-        "max_tokens": 4000
-    }
-    
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    data = {"model": "claude-sonnet-4.6", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}], "stream": True, "max_tokens": 4000}
     response = None
     try:
         response = requests.post(url, headers=headers, json=data, timeout=90, stream=True)
         if response.status_code != 200:
             yield f"Error: {response.text[:200]}"
             return
-
         for line in response.iter_lines():
             if line:
                 decoded_line = line.decode('utf-8').strip()
                 if decoded_line.startswith("data: "):
                     content = decoded_line[6:]
-                    if content == "[DONE]":
-                        break
+                    if content == "[DONE]": break
                     try:
                         json_data = json.loads(content)
                         chunk = json_data['choices'][0]['delta'].get('content')
-                        if chunk:
-                            yield chunk
-                    except:
-                        continue
-    except GeneratorExit:
-        return 
-    except Exception as e:
-        yield f" [Error: {str(e)}]"
+                        if chunk: yield chunk
+                    except: continue
+    except GeneratorExit: return 
+    except Exception as e: yield f" [Error: {str(e)}]"
     finally:
         if response:
-            try:
-                response.close()
-            except:
-                pass
+            try: response.close()
+            except: pass
 
 def update_task_status(kw, status_data):
     """Save current task progress to disk."""
