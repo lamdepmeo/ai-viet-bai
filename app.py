@@ -266,33 +266,51 @@ def call_ai(prompt, api_key, system_prompt="You are an expert SEO Content Engine
         return f"Error: {str(e)}"
 
 def call_ai_stream(prompt, api_key, system_prompt="You are an expert SEO Content Engineer."):
-    """Generator to stream AI responses. Securely handles API keys for background threads."""
+    """Robust generator to stream AI responses. Handles split UTF-8 characters and background threads."""
+    import codecs
     url = "https://llm.chiasegpu.vn/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     data = {"model": "claude-sonnet-4.6", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}], "stream": True, "max_tokens": 4000}
+    
     response = None
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=90, stream=True)
+        response = requests.post(url, headers=headers, json=data, timeout=120, stream=True)
         if response.status_code != 200:
             yield f"Error: {response.text[:200]}"
             return
-        for line in response.iter_lines():
-            if line:
-                decoded_line = line.decode('utf-8').strip()
-                if decoded_line.startswith("data: "):
-                    content = decoded_line[6:]
-                    if content == "[DONE]": break
-                    try:
-                        json_data = json.loads(content)
-                        chunk = json_data['choices'][0]['delta'].get('content')
-                        if chunk: yield chunk
-                    except: continue
-    except GeneratorExit: return 
-    except Exception as e: yield f" [Error: {str(e)}]"
+
+        line_buffer = ""
+        for chunk_bytes in response.iter_content(chunk_size=512):
+            if chunk_bytes:
+                chunk_str = decoder.decode(chunk_bytes, final=False)
+                line_buffer += chunk_str
+                
+                while "\n" in line_buffer:
+                    line, line_buffer = line_buffer.split("\n", 1)
+                    line = line.strip()
+                    if line.startswith("data: "):
+                        content = line[6:].strip()
+                        if content == "[DONE]": 
+                            break
+                        try:
+                            json_data = json.loads(content)
+                            delta = json_data['choices'][0]['delta'].get('content')
+                            if delta:
+                                yield delta
+                        except:
+                            continue
+    except GeneratorExit:
+        return 
+    except Exception as e:
+        yield f" [Stream Error: {str(e)}]"
     finally:
         if response:
-            try: response.close()
-            except: pass
+            try:
+                response.close()
+            except:
+                pass
 
 def update_task_status(kw, status_data):
     """Save current task progress to disk."""
@@ -443,8 +461,17 @@ Rules: RAW HTML ONLY. Use <h4> for points if needed. STRICT: NO <a> tags. Cite s
         # FAQ
         status_data["log"] = "Đang viết FAQ..."
         update_task_status(kw, status_data)
-        faq_p = f"Task: Write a structured FAQ section based on research. Use <h3> for questions. {lang_instr}\nQuestions: {outline_data.get('faq')}"
-        faq_out = "<h2>Frequently Asked Questions</h2>\n"
+        
+        faq_list = outline_data.get('faq', [])
+        faq_context = f"Questions: {faq_list}" if faq_list else "No specific questions provided, please generate 3-5 relevant SEO FAQ questions based on the research data yourself."
+        
+        faq_p = f"""Task: Write a high-quality FAQ section (RAW HTML). 
+{lang_instr}
+{faq_context}
+Research Context: {research_context}
+Rules: Use <h3> for questions and <p> for answers. NO <a> tags."""
+
+        faq_out = f"<h2>{ 'Các câu hỏi thường gặp' if 'Viet' in target_lang else 'Frequently Asked Questions' }</h2>\n"
         for chunk in call_ai_stream(faq_p, api_keys['AI']): faq_out += chunk
         status_data["content"] += f"\n\n{clean_ai_html(faq_out)}"
         update_task_status(kw, status_data)
