@@ -240,7 +240,7 @@ def call_ai(prompt, api_key, system_prompt="You are an expert SEO Content Engine
         "Content-Type": "application/json"
     }
     data = {
-        "model": "claude-sonnet-4.6",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -270,7 +270,7 @@ def call_ai_stream(prompt, api_key, system_prompt="You are an expert SEO Content
     import codecs
     url = "https://llm.chiasegpu.vn/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    data = {"model": "claude-sonnet-4.6", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}], "stream": True, "max_tokens": 4000}
+    data = {"model": "gpt-5.5", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}], "stream": True, "max_tokens": 4000}
     
     response = None
     decoder = codecs.getincrementaldecoder("utf-8")()
