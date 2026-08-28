@@ -237,8 +237,8 @@ def scrape_url(url):
     except Exception as e:
         return f"Error scraping {url}: {str(e)}"
 
-def call_ai(prompt, api_key, model_name="claude-sonnet-4.6", system_prompt="You are an expert SEO Content Engineer."):
-    url = "https://llm.chiasegpu.vn/v1/chat/completions"
+def call_ai(prompt, api_key, model_name="occ/claude-sonnet-4-6", system_prompt="You are an expert SEO Content Engineer."):
+    url = "https://api.vilao.ai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
@@ -269,10 +269,10 @@ def call_ai(prompt, api_key, model_name="claude-sonnet-4.6", system_prompt="You 
         st.error(f"⚠️ Lỗi hệ thống: {str(e)}")
         return f"Error: {str(e)}"
 
-def call_ai_stream(prompt, api_key, model_name="claude-sonnet-4.6", system_prompt="You are an expert SEO Content Engineer."):
+def call_ai_stream(prompt, api_key, model_name="occ/claude-sonnet-4-6", system_prompt="You are an expert SEO Content Engineer."):
     """Robust generator to stream AI responses. Handles split UTF-8 characters and background threads."""
     import codecs
-    url = "https://llm.chiasegpu.vn/v1/chat/completions"
+    url = "https://api.vilao.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     data = {"model": model_name, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}], "stream": True, "max_tokens": 4000}
     
